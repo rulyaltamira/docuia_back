@@ -1,0 +1,440 @@
+# docpilot-backend/serverless.yml
+service: docpilot-newsystem
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: eu-west-1
+  stage: ${opt:stage, 'dev'}
+  
+  # Definir variables de entorno globales para todas las funciones
+  environment:
+    CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
+    TENANTS_TABLE: ${self:service}-tenants-${self:provider.stage}
+    USERS_TABLE: ${self:service}-users-${self:provider.stage}
+    # Referencias a los nombres de bucket que se generarán automáticamente
+    MAIN_BUCKET: !Ref MainBucket
+    SES_BUCKET: !Ref SESBucket
+    AUDIT_BUCKET: !Ref AuditBucket
+    BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
+  
+  # Permisos IAM para todas las funciones
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:ListBucket
+            - s3:HeadObject
+            - s3:GetBucketNotification
+            - s3:PutBucketNotification
+          Resource:
+            - !GetAtt MainBucket.Arn
+            - !Join ['', [!GetAtt MainBucket.Arn, '/*']]
+            - !GetAtt SESBucket.Arn
+            - !Join ['', [!GetAtt SESBucket.Arn, '/*']]
+            - !GetAtt AuditBucket.Arn
+            - !Join ['', [!GetAtt AuditBucket.Arn, '/*']]
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - !GetAtt ContractsTable.Arn
+            - !GetAtt TenantsTable.Arn
+            - !GetAtt UsersTable.Arn
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogGroups
+            - logs:DescribeLogStreams
+            - logs:CreateExportTask
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+            - ses:GetIdentityVerificationAttributes
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+          Resource: "*"
+
+# Configuración para excluir archivos innecesarios durante el despliegue
+package:
+  individually: true   # Empaquetar cada función por separado
+  patterns:
+    - '!node_modules/**'  # Excluir node_modules completo
+    - '!.git/**'          # Excluir carpeta .git
+    - '!.github/**'       # Excluir carpeta .github si existe
+    - '!tests/**'         # Excluir carpeta de tests
+    - '!.vscode/**'       # Excluir configuración de VSCode
+    - '!.idea/**'         # Excluir configuración de IntelliJ/PyCharm
+    - '!__pycache__/**'   # Excluir caché de Python
+    - '!*.pyc'            # Excluir archivos compilados de Python
+    - '!*.pyo'            # Excluir archivos optimizados de Python
+    - '!.pytest_cache/**' # Excluir caché de pytest
+    - '!.coverage'        # Excluir archivo de cobertura
+    - '!.DS_Store'        # Excluir archivos de sistema macOS
+    - '!*.log'            # Excluir archivos de log
+    - '!*.md'             # Excluir archivos markdown (README, etc.)
+    - '!package-lock.json' # Excluir package-lock.json
+    - '!yarn.lock'        # Excluir yarn.lock
+    - '!.env*'            # Excluir archivos de entorno
+
+# Definir plugins
+plugins:
+  - serverless-python-requirements
+  - serverless-iam-roles-per-function
+
+# Personalización de las funciones Python
+custom:
+  pythonRequirements:
+    dockerizePip: true
+    zip: true
+    slim: true          # Elimina archivos innecesarios de las dependencias
+    slimPatterns:
+      - '**/*.egg-info*'
+      - '**/*.dist-info*'
+      - '**/*.pyc'
+      - '**/__pycache__/**'
+      - '**/*.so'
+      - '**/*.pyd'
+      - '**/*.pth'
+      - '**/tests/**'
+      - '**/.mypy_cache/**'
+    noDeploy:
+      - pytest
+      - pytest-cov
+      - coverage
+      - black
+      - flake8
+      - mypy
+      - pylint
+      - boto3     # No incluir boto3, ya está disponible en el entorno Lambda
+      - botocore  # No incluir botocore, ya está disponible en el entorno Lambda
+
+# Definición de funciones
+functions:
+  emailHandler:
+    handler: src/handlers/email_handler.lambda_handler
+    description: Procesa emails recibidos por SES
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/email_handler.py'
+        - 'src/utils/**'
+
+  generateUrl:
+    handler: src/handlers/generate_url.lambda_handler
+    description: Genera URLs prefirmadas para subida de documentos
+    memorySize: 128
+    timeout: 10
+    package:
+      patterns:
+        - 'src/handlers/generate_url.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: generate-url
+          method: get
+          cors: true
+
+  confirmUpload:
+    handler: src/handlers/confirm_upload.lambda_handler
+    description: Confirma la subida de documentos
+    memorySize: 128
+    timeout: 10
+    package:
+      patterns:
+        - 'src/handlers/confirm_upload.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: confirm-upload
+          method: post
+          cors: true
+
+  documentProcessor:
+    handler: src/handlers/document_processor.lambda_handler
+    description: Procesa documentos con IA usando Bedrock
+    memorySize: 1024
+    timeout: 180
+    package:
+      patterns:
+        - 'src/handlers/document_processor.py'
+        - 'src/utils/**'
+
+  tenantManagement:
+    handler: src/handlers/tenant_management.lambda_handler
+    description: Gestiona tenants (clientes)
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/tenant_management.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: tenants
+          method: get
+          cors: true
+      - http:
+          path: tenants
+          method: post
+          cors: true
+      - http:
+          path: tenants/{tenant_id}
+          method: get
+          cors: true
+      - http:
+          path: tenants/{tenant_id}
+          method: put
+          cors: true
+      - http:
+          path: tenants/{tenant_id}
+          method: delete
+          cors: true
+
+  userManagement:
+    handler: src/handlers/user_management.lambda_handler
+    description: Gestiona usuarios
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/user_management.py'
+        - 'src/utils/**'
+    environment:
+      USER_POOL_ID: !Ref CognitoUserPool
+    events:
+      - http:
+          path: users
+          method: get
+          cors: true
+      - http:
+          path: users
+          method: post
+          cors: true
+      - http:
+          path: users/{user_id}
+          method: get
+          cors: true
+      - http:
+          path: users/{user_id}
+          method: put
+          cors: true
+      - http:
+          path: users/{user_id}
+          method: delete
+          cors: true
+
+  documentManager:
+    handler: src/handlers/document_manager.lambda_handler
+    description: Gestiona documentos
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/document_manager.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: documents
+          method: get
+          cors: true
+      - http:
+          path: documents/{id}
+          method: get
+          cors: true
+      - http:
+          path: documents/{id}
+          method: delete
+          cors: true
+      - http:
+          path: documents/{id}/view
+          method: get
+          cors: true
+      - http:
+          path: documents/{id}/summary
+          method: get
+          cors: true
+      - http:
+          path: stats
+          method: get
+          cors: true
+
+  auditLogger:
+    handler: src/handlers/audit_logger.lambda_handler
+    description: Registra eventos para auditoría
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/audit_logger.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: audit/log
+          method: post
+          cors: true
+      - http:
+          path: audit/export
+          method: post
+          cors: true
+
+  # Eliminada la función configureS3
+
+# Definición de recursos
+resources:
+  Resources:
+    # Tablas DynamoDB
+    ContractsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CONTRACTS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+    TenantsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TENANTS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: tenant_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: tenant_id
+            KeyType: HASH
+
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+
+    # Buckets S3 con nombres auto-generados
+    MainBucket:
+      Type: AWS::S3::Bucket
+      DeletionPolicy: Retain
+      Properties:
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, PUT, POST, HEAD]
+              AllowedOrigins: ['*']
+              MaxAge: 3000
+
+    SESBucket:
+      Type: AWS::S3::Bucket
+      DeletionPolicy: Retain
+
+    AuditBucket:
+      Type: AWS::S3::Bucket
+      DeletionPolicy: Retain
+      Properties:
+        LifecycleConfiguration:
+          Rules:
+            - Id: RetainAuditLogs
+              Status: Enabled
+              Prefix: audit-logs/
+              Transitions:
+                - TransitionInDays: 90
+                  StorageClass: GLACIER
+              ExpirationInDays: 365
+
+    # Permisos para que S3 pueda invocar funciones Lambda
+    EmailHandlerPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !GetAtt EmailHandlerLambdaFunction.Arn
+        Principal: s3.amazonaws.com
+        SourceArn: !GetAtt SESBucket.Arn
+
+    DocumentProcessorPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !GetAtt DocumentProcessorLambdaFunction.Arn
+        Principal: s3.amazonaws.com
+        SourceArn: !GetAtt MainBucket.Arn
+
+    # Eliminado el S3NotificationsResource
+
+    # Cognito User Pool
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:service}-user-pool-${self:provider.stage}
+        AutoVerifiedAttributes:
+          - email
+        Schema:
+          - Name: email
+            AttributeDataType: String
+            Mutable: true
+            Required: true
+          - Name: custom:tenant_id
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+          - Name: custom:role
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: ${self:service}-app-client-${self:provider.stage}
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: true
+        ExplicitAuthFlows:
+          - ADMIN_NO_SRP_AUTH
+          - USER_PASSWORD_AUTH
+
+  # Outputs para uso en frontend o integración con otros sistemas
+  Outputs:
+    ApiUrl:
+      Description: URL de la API
+      Value: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}
+    UserPoolId:
+      Description: ID del User Pool de Cognito
+      Value: !Ref CognitoUserPool
+    UserPoolClientId:
+      Description: ID del cliente de aplicación de Cognito
+      Value: !Ref CognitoUserPoolClient
+    MainBucketName:
+      Description: Nombre del bucket principal
+      Value: !Ref MainBucket
+    SESBucketName:
+      Description: Nombre del bucket SES
+      Value: !Ref SESBucket
+    AuditBucketName:
+      Description: Nombre del bucket de auditoría
+      Value: !Ref AuditBucket
