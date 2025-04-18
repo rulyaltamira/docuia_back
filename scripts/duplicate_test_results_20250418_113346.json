@@ -1,0 +1,118 @@
+{
+  "check_hash_new": {
+    "success": true,
+    "is_duplicate": false,
+    "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+    "result": {
+      "is_duplicate": false,
+      "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544"
+    }
+  },
+  "check_content_new": {
+    "success": true,
+    "is_duplicate": false,
+    "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+    "result": {
+      "is_duplicate": false,
+      "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544"
+    }
+  },
+  "upload_original": {
+    "success": true,
+    "file_id": "55905924-2b0c-4813-a109-83056a3520d2",
+    "is_duplicate": false,
+    "original_doc_id": null
+  },
+  "check_hash_existing": {
+    "success": true,
+    "is_duplicate": true,
+    "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+    "result": {
+      "is_duplicate": true,
+      "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+      "original_doc": {
+        "id": "55905924-2b0c-4813-a109-83056a3520d2",
+        "filename": "test_duplicado_original.txt",
+        "upload_date": "2025-04-18T09:33:38.132634",
+        "status": "pending_processing"
+      }
+    }
+  },
+  "check_content_existing": {
+    "success": true,
+    "is_duplicate": true,
+    "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+    "result": {
+      "is_duplicate": true,
+      "hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+      "original_doc": {
+        "id": "55905924-2b0c-4813-a109-83056a3520d2",
+        "filename": "test_duplicado_original.txt",
+        "upload_date": "2025-04-18T09:33:38.132634",
+        "status": "pending_processing"
+      }
+    }
+  },
+  "upload_duplicate": {
+    "success": true,
+    "file_id": "63aaaed3-b02f-4a54-896f-2df516138913",
+    "is_duplicate": true,
+    "original_doc_id": "55905924-2b0c-4813-a109-83056a3520d2"
+  },
+  "handle_duplicate": {
+    "success": true,
+    "action": "ignore",
+    "result": {
+      "message": "Documento marcado como duplicado",
+      "document_id": "63aaaed3-b02f-4a54-896f-2df516138913",
+      "action": "ignore"
+    },
+    "document": {
+      "upload_confirmed_at": "2025-04-18T09:33:41.796884",
+      "encoded_filename": "test_duplicado_copia.txt",
+      "status": "duplicate",
+      "timestamp": "2025-04-18T09:33:41.345877",
+      "document_hash": "8823cb26b5304a7dd4ca8120eba720140e3f849f7f8e8d685dc9423fdf514544",
+      "is_duplicate": true,
+      "source": "manual",
+      "filename": "test_duplicado_copia.txt",
+      "user_id": "anonymous",
+      "tenant_id": "default",
+      "content_type": "text/plain",
+      "original_doc_id": "55905924-2b0c-4813-a109-83056a3520d2",
+      "description": "",
+      "id": "63aaaed3-b02f-4a54-896f-2df516138913",
+      "s3_key": "tenants/default/raw/manual/63aaaed3-b02f-4a54-896f-2df516138913/test_duplicado_copia.txt"
+    }
+  },
+  "check_stats": {
+    "success": true,
+    "stats": {
+      "totalDocuments": 21,
+      "pendingDocuments": 12,
+      "processedDocuments": 8,
+      "errorDocuments": 0,
+      "duplicateDocuments": 1,
+      "averageSize": 0,
+      "bySource": {
+        "email": 0,
+        "manual": 25
+      },
+      "byStatus": {
+        "pending_processing": 11,
+        "processing": 1,
+        "processed": 8,
+        "error": 0,
+        "deleted": 4,
+        "awaiting_upload": 0,
+        "duplicate": 1
+      }
+    }
+  },
+  "upload_modified": {
+    "success": true,
+    "file_id": "0fa7aa1d-6629-495c-bf58-e4da1927295a",
+    "is_duplicate": false,
+    "original_doc_id": null
+  }
+}
