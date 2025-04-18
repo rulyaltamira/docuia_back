@@ -6,8 +6,10 @@ import boto3
 from datetime import datetime
 import logging
 
-# Importar el nuevo módulo de manejo de rutas S3
+# Importar el módulo de manejo de rutas S3
 from src.utils.s3_path_helper import encode_s3_key
+# Importar módulo de validación de límites
+from src.utils.tenant_limits_validator import can_upload_file
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -43,8 +45,29 @@ def lambda_handler(event, context):
         description = query_params.get('description', '')
         tenant_id = query_params.get('tenant_id', 'default')
         user_id = query_params.get('userId', 'anonymous')
+        file_size = int(query_params.get('fileSize', 0))
         
-        logger.info(f"Generando URL para archivo: {original_filename}, tenant: {tenant_id}, usuario: {user_id}")
+        logger.info(f"Generando URL para archivo: {original_filename}, tenant: {tenant_id}, usuario: {user_id}, tamaño: {file_size} bytes")
+        
+        # Verificar límites del tenant para subida de archivos
+        if file_size > 0:
+            limits_check = can_upload_file(tenant_id, file_size)
+            
+            if not limits_check['can_proceed']:
+                logger.warning(f"No se puede subir archivo: {limits_check['reason']}")
+                return {
+                    'statusCode': 403,
+                    'headers': {
+                        'Access-Control-Allow-Origin': '*',
+                        'Content-Type': 'application/json'
+                    },
+                    'body': json.dumps({
+                        'error': 'No se puede subir archivo',
+                        'reason': limits_check['reason'],
+                        'limit_reached': limits_check.get('limit_reached', False),
+                        'limit_type': limits_check.get('limit_type', '')
+                    })
+                }
         
         # Generar ID único para el documento
         doc_id = str(uuid.uuid4())
@@ -78,6 +101,7 @@ def lambda_handler(event, context):
             'content_type': content_type,
             'user_id': user_id,
             'description': description,
+            'file_size': file_size,
             'status': 'awaiting_upload'
         })
         

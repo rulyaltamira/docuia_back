@@ -14,6 +14,14 @@ provider:
     CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
     TENANTS_TABLE: ${self:service}-tenants-${self:provider.stage}
     USERS_TABLE: ${self:service}-users-${self:provider.stage}
+    ALERTS_TABLE: ${self:service}-alerts-${self:provider.stage}
+    ALERT_RULES_TABLE: ${self:service}-alert-rules-${self:provider.stage}
+    ALERT_PREFERENCES_TABLE: ${self:service}-alert-preferences-${self:provider.stage}
+    ALERT_PROCESSOR_FUNCTION: ${self:service}-${self:provider.stage}-alertProcessor
+    ROLES_TABLE: ${self:service}-roles-${self:provider.stage}
+    PERMISSIONS_TABLE: ${self:service}-permissions-${self:provider.stage}
+    USER_ROLES_TABLE: ${self:service}-user-roles-${self:provider.stage}
+    ROLE_PERMISSIONS_TABLE: ${self:service}-role-permissions-${self:provider.stage}
     # Referencias a los nombres de bucket que se generarán automáticamente
     MAIN_BUCKET: !Ref MainBucket
     SES_BUCKET: !Ref SESBucket
@@ -51,6 +59,13 @@ provider:
             - !GetAtt ContractsTable.Arn
             - !GetAtt TenantsTable.Arn
             - !GetAtt UsersTable.Arn
+            - !GetAtt AlertsTable.Arn
+            - !GetAtt AlertRulesTable.Arn
+            - !GetAtt AlertPreferencesTable.Arn
+            - !GetAtt RolesTable.Arn
+            - !GetAtt PermissionsTable.Arn
+            - !GetAtt UserRolesTable.Arn
+            - !GetAtt RolePermissionsTable.Arn
         - Effect: Allow
           Action:
             - logs:CreateLogGroup
@@ -208,6 +223,50 @@ functions:
           path: tenants/{tenant_id}
           method: delete
           cors: true
+      - http:
+          path: tenant-plans
+          method: get
+          cors: true
+      - http:
+          path: tenants/{tenant_id}/usage
+          method: get
+          cors: true
+      - http:
+          path: tenants/{tenant_id}/plan
+          method: put
+          cors: true
+
+  tenantOnboarding:
+    handler: src/handlers/tenant_onboarding.lambda_handler
+    description: Proceso automatizado de onboarding para nuevos tenants
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/tenant_onboarding.py'
+        - 'src/utils/**'
+    environment:
+      USER_POOL_ID: !Ref CognitoUserPool
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - cognito-idp:AdminCreateUser
+          - cognito-idp:AdminGetUser
+          - cognito-idp:AdminUpdateUserAttributes
+        Resource: !GetAtt CognitoUserPool.Arn
+    events:
+      - http:
+          path: tenants/onboard
+          method: post
+          cors: true
+      - http:
+          path: tenants/onboard/admin
+          method: post
+          cors: true
+      - http:
+          path: tenants/onboard/status
+          method: get
+          cors: true
 
   userManagement:
     handler: src/handlers/user_management.lambda_handler
@@ -336,6 +395,243 @@ functions:
           path: documents/handle-duplicate
           method: post
           cors: true
+          
+  # Nueva función para configuración de dominios SES
+  sesConfigurator:
+    handler: src/handlers/email/ses_configurator.lambda_handler
+    description: Configura dominios SES para tenants
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/email/ses_configurator.py'
+        - 'src/utils/**'
+    # Añadir estos permisos específicos para la función sesConfigurator
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ses:VerifyDomainIdentity
+          - ses:VerifyDomainDkim
+          - ses:GetIdentityVerificationAttributes
+          - ses:GetIdentityDkimAttributes
+          - ses:DeleteIdentity
+          - ses:CreateReceiptRuleSet
+          - ses:CreateReceiptRule
+          - ses:DeleteReceiptRule
+          - ses:SetActiveReceiptRuleSet
+          - ses:ListReceiptRuleSets
+          - route53:ChangeResourceRecordSets
+        Resource: "*"
+    events:
+      - http:
+          path: email/domain
+          method: post
+          cors: true
+      - http:
+          path: email/domain/status
+          method: get
+          cors: true
+      - http:
+          path: email/receipt-rule
+          method: post
+          cors: true
+      - http:
+          path: email/domains
+          method: get
+          cors: true
+      - http:
+          path: email/domain/{tenant_id}/{domain}
+          method: delete
+          cors: true
+
+  # Sistema de alertas
+  alertRuleManager:
+    handler: src/handlers/alerts/alert_rule_manager.lambda_handler
+    description: Gestión de reglas de alerta
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_rule_manager.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts/rules
+          method: post
+          cors: true
+      - http:
+          path: alerts/rules
+          method: get
+          cors: true
+      - http:
+          path: alerts/rules/{rule_id}
+          method: get
+          cors: true
+      - http:
+          path: alerts/rules/{rule_id}
+          method: put
+          cors: true
+      - http:
+          path: alerts/rules/{rule_id}
+          method: delete
+          cors: true
+      - http:
+          path: alerts/rules/validate
+          method: post
+          cors: true
+
+  alertProcessor:
+    handler: src/handlers/alerts/alert_processor.lambda_handler
+    description: Procesador de alertas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_processor.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts/process
+          method: post
+          cors: true
+      - http:
+          path: alerts
+          method: get
+          cors: true
+      - http:
+          path: alerts/{alert_id}
+          method: get
+          cors: true
+      - http:
+          path: alerts/{alert_id}/status
+          method: put
+          cors: true
+      - http:
+          path: alerts/summary
+          method: get
+          cors: true
+
+  alertNotifier:
+    handler: src/handlers/alerts/alert_notifier.lambda_handler
+    description: Notificador de alertas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_notifier.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts/notify
+          method: post
+          cors: true
+      - http:
+          path: alerts/preferences
+          method: post
+          cors: true
+      - http:
+          path: alerts/preferences
+          method: get
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: "*"
+
+  scheduledAlertChecker:
+    handler: src/handlers/alerts/scheduled_alert_checker.lambda_handler
+    description: Verificador periódico de condiciones para alertas programadas
+    memorySize: 256
+    timeout: 180  # Más tiempo para revisar muchas reglas
+    package:
+      patterns:
+        - 'src/handlers/alerts/scheduled_alert_checker.py'
+        - 'src/utils/**'
+    environment:
+      ALERT_PROCESSOR_FUNCTION: !GetAtt AlertProcessorLambdaFunction.Arn
+    events:
+      # Ejecutar cada hora por defecto
+      - schedule: rate(1 hour)
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - lambda:InvokeFunction
+        Resource: !GetAtt AlertProcessorLambdaFunction.Arn
+      - Effect: Allow
+        Action:
+          - cloudwatch:PutMetricData
+        Resource: "*"
+
+  # Sistema de control de acceso granular
+  roleManagement:
+    handler: src/handlers/role_management.lambda_handler
+    description: Gestión de roles y permisos para control de acceso granular
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/role_management.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: roles
+          method: get
+          cors: true
+      - http:
+          path: roles
+          method: post
+          cors: true
+      - http:
+          path: roles/{role_id}
+          method: get
+          cors: true
+      - http:
+          path: roles/{role_id}
+          method: put
+          cors: true
+      - http:
+          path: roles/{role_id}
+          method: delete
+          cors: true
+      - http:
+          path: permissions
+          method: get
+          cors: true
+      - http:
+          path: permissions/system
+          method: get
+          cors: true
+      - http:
+          path: user-roles
+          method: post
+          cors: true
+      - http:
+          path: user-roles
+          method: get
+          cors: true
+      - http:
+          path: user-roles/{id}
+          method: delete
+          cors: true
+      - http:
+          path: role-permissions
+          method: post
+          cors: true
+      - http:
+          path: role-permissions
+          method: get
+          cors: true
+      - http:
+          path: role-permissions/{id}
+          method: delete
+          cors: true
+      - http:
+          path: my-permissions
+          method: get
+          cors: true
 
 # Definición de recursos
 resources:
@@ -375,6 +671,92 @@ resources:
             AttributeType: S
         KeySchema:
           - AttributeName: user_id
+            KeyType: HASH
+
+    # Tablas DynamoDB para el sistema de alertas
+    AlertsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ALERTS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: alert_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: alert_id
+            KeyType: HASH
+
+    AlertRulesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ALERT_RULES_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: rule_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: rule_id
+            KeyType: HASH
+
+    AlertPreferencesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ALERT_PREFERENCES_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: preference_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: preference_id
+            KeyType: HASH
+
+    # Tablas DynamoDB para el sistema de control de acceso
+    RolesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ROLES_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: role_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: role_id
+            KeyType: HASH
+
+    PermissionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.PERMISSIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: permission_code
+            AttributeType: S
+        KeySchema:
+          - AttributeName: permission_code
+            KeyType: HASH
+
+    UserRolesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USER_ROLES_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+    RolePermissionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ROLE_PERMISSIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
             KeyType: HASH
 
     # Buckets S3 con nombres auto-generados
