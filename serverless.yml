@@ -220,6 +220,16 @@ functions:
         - 'src/utils/**'
     environment:
       USER_POOL_ID: !Ref CognitoUserPool
+    # Añadir estos permisos específicos para la función userManagement
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - cognito-idp:AdminCreateUser
+          - cognito-idp:AdminGetUser
+          - cognito-idp:AdminUpdateUserAttributes
+          - cognito-idp:AdminDisableUser
+          - cognito-idp:ListUsers
+        Resource: !GetAtt CognitoUserPool.Arn
     events:
       - http:
           path: users
@@ -295,8 +305,6 @@ functions:
           path: audit/export
           method: post
           cors: true
-
-  # Eliminada la función configureS3
 
 # Definición de recursos
 resources:
@@ -385,8 +393,6 @@ resources:
         Principal: s3.amazonaws.com
         SourceArn: !GetAtt MainBucket.Arn
 
-    # Eliminado el S3NotificationsResource
-
     # Cognito User Pool
     CognitoUserPool:
       Type: AWS::Cognito::UserPool
@@ -413,7 +419,7 @@ resources:
       Properties:
         ClientName: ${self:service}-app-client-${self:provider.stage}
         UserPoolId: !Ref CognitoUserPool
-        GenerateSecret: true
+        GenerateSecret: false  # Cambiado a false para permitir aplicaciones frontend
         ExplicitAuthFlows:
           - ADMIN_NO_SRP_AUTH
           - USER_PASSWORD_AUTH
