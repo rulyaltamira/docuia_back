@@ -6,6 +6,9 @@ import boto3
 from datetime import datetime
 import logging
 
+# Importar el nuevo módulo de manejo de rutas S3
+from src.utils.s3_path_helper import encode_s3_key
+
 # Configuración de servicios
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -34,13 +37,14 @@ def lambda_handler(event, context):
             }
         
         # Extraer y validar parámetros
-        filename = query_params.get('filename')
+        original_filename = query_params.get('filename')
+        filename = encode_s3_key(original_filename)  # Codificar para S3
         content_type = query_params.get('contentType', 'application/octet-stream')
         description = query_params.get('description', '')
         tenant_id = query_params.get('tenant_id', 'default')
         user_id = query_params.get('userId', 'anonymous')
         
-        logger.info(f"Generando URL para archivo: {filename}, tenant: {tenant_id}, usuario: {user_id}")
+        logger.info(f"Generando URL para archivo: {original_filename}, tenant: {tenant_id}, usuario: {user_id}")
         
         # Generar ID único para el documento
         doc_id = str(uuid.uuid4())
@@ -67,7 +71,8 @@ def lambda_handler(event, context):
             'id': doc_id,
             'tenant_id': tenant_id,
             'source': 'manual',
-            'filename': filename,
+            'filename': original_filename,  # Guardar nombre original para visualización
+            'encoded_filename': filename,   # Guardar nombre codificado para referencia
             's3_key': file_key,
             'timestamp': timestamp,
             'content_type': content_type,
@@ -87,6 +92,8 @@ def lambda_handler(event, context):
             'body': json.dumps({
                 'upload_url': url,
                 'file_id': doc_id,
+                'original_filename': original_filename,
+                'encoded_filename': filename,
                 'expires_in': 300
             })
         }

@@ -6,7 +6,11 @@ import logging
 import io
 import PyPDF2
 import docx
+import hashlib
 from datetime import datetime
+
+# Importar módulos de utilidades
+from src.utils.s3_path_helper import decode_s3_key, split_s3_path
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -54,6 +58,10 @@ def extract_text(file_content, file_type):
         return file_content.decode('utf-8', errors='replace')
     else:
         raise ValueError(f"Tipo de archivo no soportado: {file_type}")
+
+def calculate_document_hash(file_content):
+    """Calcula el hash SHA-256 de un documento para detectar duplicados"""
+    return hashlib.sha256(file_content).hexdigest()
 
 def analyze_contract_with_bedrock(text, language='es'):
     """Analiza el texto del contrato usando AWS Bedrock"""
@@ -126,6 +134,37 @@ def analyze_contract_with_bedrock(text, language='es'):
         logger.error(f"Error al invocar Bedrock: {str(e)}")
         raise
 
+def check_duplicate_document(tenant_id, doc_hash):
+    """
+    Verifica si un documento con el mismo hash ya existe para el tenant
+    
+    Args:
+        tenant_id (str): ID del tenant
+        doc_hash (str): Hash SHA-256 del documento
+        
+    Returns:
+        dict: Información del documento duplicado si existe, None si no hay duplicado
+    """
+    try:
+        # Buscar documentos con el mismo hash y tenant_id
+        response = contracts_table.scan(
+            FilterExpression="tenant_id = :t AND document_hash = :h",
+            ExpressionAttributeValues={
+                ":t": tenant_id,
+                ":h": doc_hash
+            }
+        )
+        
+        if response.get('Items'):
+            # Encontramos un duplicado
+            return response['Items'][0]
+        else:
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error verificando duplicados: {str(e)}")
+        return None
+
 def lambda_handler(event, context):
     """Procesa un documento cuando es subido a S3"""
     try:
@@ -136,7 +175,7 @@ def lambda_handler(event, context):
         logger.info(f"Procesando documento: {key}")
         
         # Validar la estructura del path para multi-tenant
-        path_parts = key.split('/')
+        path_info = split_s3_path(key)
         
         # Solo procesar archivos en el directorio 'raw'
         if 'raw' not in key:
@@ -146,19 +185,18 @@ def lambda_handler(event, context):
                 'body': json.dumps({'message': 'Archivo no procesable, no está en directorio raw'})
             }
         
-        # Extraer información del path
-        if path_parts[0] == 'tenants' and len(path_parts) >= 6:
-            # Estructura: "tenants/{tenant_id}/raw/{source}/{doc_id}/{filename}"
-            tenant_id = path_parts[1]
-            doc_source = path_parts[3]  # 'email' o 'manual'
-            doc_id = path_parts[4]
-            filename = path_parts[5]
-        else:
-            # Estructura legacy: "raw/{source}/{doc_id}/{filename}"
-            tenant_id = "default"
-            doc_source = path_parts[1]  # 'email' o 'manual'
-            doc_id = path_parts[2]
-            filename = path_parts[3]
+        # Extraer información del path usando la función de utilidad
+        tenant_id = path_info.get('tenant_id', 'default')
+        doc_source = path_info.get('source', 'unknown')
+        doc_id = path_info.get('doc_id')
+        filename = path_info.get('filename')
+        
+        if not doc_id:
+            logger.error(f"No se pudo extraer doc_id de la ruta: {key}")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Formato de ruta inválido'})
+            }
         
         logger.info(f"Documento identificado - tenant: {tenant_id}, id: {doc_id}, fuente: {doc_source}")
         
@@ -187,10 +225,43 @@ def lambda_handler(event, context):
         
         logger.info(f"Archivo descargado de S3: {key}, tipo: {content_type}")
         
+        # Calcular hash del documento para detección de duplicados
+        document_hash = calculate_document_hash(file_content)
+        
+        # Verificar si es un documento duplicado
+        duplicate_doc = check_duplicate_document(tenant_id, document_hash)
+        if duplicate_doc and duplicate_doc['id'] != doc_id:
+            logger.warning(f"Documento duplicado detectado. Original: {duplicate_doc['id']}, Nuevo: {doc_id}")
+            
+            # Actualizar metadatos para marcar como duplicado
+            contracts_table.update_item(
+                Key={'id': doc_id},
+                UpdateExpression="set #status = :s, is_duplicate = :d, original_doc_id = :o, document_hash = :h",
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={
+                    ':s': 'duplicate',
+                    ':d': True,
+                    ':o': duplicate_doc['id'],
+                    ':h': document_hash
+                }
+            )
+            
+            logger.info(f"Documento marcado como duplicado: {doc_id}")
+            
+            # Opcionalmente, podríamos detener el procesamiento aquí
+            # Por ahora, continuamos con el procesamiento normal
+        
         # Extraer texto según tipo de archivo
         try:
             text = extract_text(file_content, content_type)
             logger.info(f"Texto extraído correctamente, longitud: {len(text)} caracteres")
+            
+            # Actualizar el hash del documento en DynamoDB
+            contracts_table.update_item(
+                Key={'id': doc_id},
+                UpdateExpression="set document_hash = :h",
+                ExpressionAttributeValues={':h': document_hash}
+            )
         except Exception as e:
             logger.error(f"Error extrayendo texto: {str(e)}")
             contracts_table.update_item(

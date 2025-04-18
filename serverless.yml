@@ -306,6 +306,37 @@ functions:
           method: post
           cors: true
 
+  # Nuevas funciones para gestión de duplicados
+  checkDuplicates:
+    handler: src/handlers/check_duplicates.lambda_handler
+    description: Verifica si un documento es duplicado
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/check_duplicates.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: documents/check-duplicate
+          method: post
+          cors: true
+
+  handleDuplicate:
+    handler: src/handlers/check_duplicates.handle_duplicate
+    description: Gestiona qué hacer con un documento duplicado
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/check_duplicates.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: documents/handle-duplicate
+          method: post
+          cors: true
+
 # Definición de recursos
 resources:
   Resources:

@@ -9,6 +9,9 @@ from email.parser import BytesParser
 from datetime import datetime
 import logging
 
+# Importar el nuevo módulo de manejo de rutas S3
+from src.utils.s3_path_helper import encode_s3_key
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -46,9 +49,9 @@ def lambda_handler(event, context):
         
         logger.info(f"Email de: {from_address}, Asunto: {subject}")
         
+        # Identificar el tenant a partir del correo destinatario
         # Por defecto, usar tenant "default"
-        # En un sistema completo, se identificaría el tenant por el dominio o correo
-        tenant_id = "default"
+        tenant_id = determine_tenant_from_email(msg)
         
         # Extraer cuerpo del email
         body = ""
@@ -66,9 +69,12 @@ def lambda_handler(event, context):
         # Procesar adjuntos
         processed_files = 0
         for part in msg.iter_attachments():
-            filename = part.get_filename()
-            if not filename:
+            original_filename = part.get_filename()
+            if not original_filename:
                 continue
+            
+            # Codificar el nombre de archivo para S3
+            encoded_filename = encode_s3_key(original_filename)
                 
             content_type = part.get_content_type()
             content = part.get_payload(decode=True)
@@ -76,15 +82,15 @@ def lambda_handler(event, context):
             # Solo procesar archivos PDF o DOCX
             allowed_types = ['application/pdf', 'application/msword', 
                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-            if content_type not in allowed_types and not filename.lower().endswith(('.pdf', '.docx', '.doc')):
-                logger.info(f"Omitiendo archivo no soportado: {filename}, tipo: {content_type}")
+            if content_type not in allowed_types and not original_filename.lower().endswith(('.pdf', '.docx', '.doc')):
+                logger.info(f"Omitiendo archivo no soportado: {original_filename}, tipo: {content_type}")
                 continue
             
             # Generar ID único para el documento
             doc_id = str(uuid.uuid4())
             
-            # Definir ruta multi-tenant
-            file_key = f"tenants/{tenant_id}/raw/email/{doc_id}/{filename}"
+            # Definir ruta multi-tenant con nombre de archivo codificado
+            file_key = f"tenants/{tenant_id}/raw/email/{doc_id}/{encoded_filename}"
             
             # Guardar archivo en S3
             s3.put_object(
@@ -95,7 +101,8 @@ def lambda_handler(event, context):
                 Metadata={
                     'source': 'email',
                     'email_subject': subject,
-                    'email_from': from_address
+                    'email_from': from_address,
+                    'original_filename': original_filename
                 }
             )
             
@@ -107,12 +114,14 @@ def lambda_handler(event, context):
                 'id': doc_id,
                 'tenant_id': tenant_id,
                 'source': 'email',
-                'filename': filename,
+                'filename': original_filename,  # Guardar nombre original para visualización
+                'encoded_filename': encoded_filename,  # Guardar nombre codificado para referencia
                 's3_key': file_key,
                 'timestamp': timestamp,
                 'email_timestamp': datetime.now().isoformat(),
                 'email_from': from_address,
                 'email_subject': subject,
+                'email_body': body[:1000] if body else "",  # Guardar parte del cuerpo para contexto
                 'content_type': content_type,
                 'file_size': len(content),
                 'status': 'pending_processing'
@@ -137,3 +146,43 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps({'error': str(e)})
         }
+
+def determine_tenant_from_email(msg):
+    """
+    Determina el tenant_id a partir del destinatario del correo
+    Formato esperado: username@tenant-id.docpilot.com o documents@tenant-id.docpilot.com
+    """
+    try:
+        # Obtener destinatarios
+        to_addresses = msg.get('to', [])
+        if isinstance(to_addresses, str):
+            to_addresses = [to_addresses]
+        
+        cc_addresses = msg.get('cc', [])
+        if isinstance(cc_addresses, str):
+            cc_addresses = [cc_addresses]
+        
+        # Combinar destinatarios
+        all_recipients = to_addresses + cc_addresses
+        
+        # Buscar dominios de DocPilot
+        for recipient in all_recipients:
+            if '@' in recipient and '.docpilot.com' in recipient.lower():
+                email_parts = recipient.split('@')
+                if len(email_parts) == 2:
+                    domain = email_parts[1].lower()
+                    if domain.endswith('.docpilot.com'):
+                        tenant_part = domain.replace('.docpilot.com', '')
+                        # Si el dominio es tenant-id.docpilot.com, extraer tenant-id
+                        if '-' in tenant_part:
+                            tenant_id = tenant_part
+                            logger.info(f"Tenant identificado desde el correo: {tenant_id}")
+                            return tenant_id
+        
+        # Si no se encuentra un tenant específico, usar 'default'
+        logger.info("No se pudo identificar tenant desde el correo, usando 'default'")
+        return 'default'
+    
+    except Exception as e:
+        logger.warning(f"Error identificando tenant desde email: {str(e)}")
+        return 'default'
