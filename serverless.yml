@@ -633,6 +633,93 @@ functions:
           method: get
           cors: true
 
+  metricsCollector:
+    handler: src/handlers/stats/metrics_collector.lambda_handler
+    description: Recolecta métricas para estadísticas y análisis
+    memorySize: 512
+    timeout: 300
+    package:
+      patterns:
+        - 'src/handlers/stats/metrics_collector.py'
+        - 'src/utils/**'
+    events:
+      - schedule: rate(1 hour)
+      - http:
+          path: stats/collect
+          method: post
+          cors: true
+
+  statisticsApi:
+    handler: src/handlers/stats/statistics_api.lambda_handler
+    description: APIs para consulta de estadísticas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/stats/statistics_api.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: stats/documents
+          method: get
+          cors: true
+      - http:
+          path: stats/users
+          method: get
+          cors: true
+      - http:
+          path: stats/processing
+          method: get
+          cors: true
+      - http:
+          path: stats/storage
+          method: get
+          cors: true
+      - http:
+          path: stats/summary
+          method: get
+          cors: true
+      - http:
+          path: stats/trends
+          method: get
+          cors: true
+
+  reportGenerator:
+    handler: src/handlers/stats/report_generator.lambda_handler
+    description: Genera informes de estadísticas
+    memorySize: 512
+    timeout: 300
+    package:
+      patterns:
+        - 'src/handlers/stats/report_generator.py'
+        - 'src/utils/**'
+    events:
+      - schedule: rate(1 day)
+      - http:
+          path: reports/generate
+          method: post
+          cors: true
+      - http:
+          path: reports
+          method: get
+          cors: true
+      - http:
+          path: reports/{report_id}
+          method: get
+          cors: true
+      - http:
+          path: reports/schedule
+          method: post
+          cors: true
+      - http:
+          path: reports/schedules
+          method: get
+          cors: true
+      - http:
+          path: reports/schedules/{schedule_id}
+          method: delete
+          cors: true
+
 # Definición de recursos
 resources:
   Resources:
@@ -758,6 +845,87 @@ resources:
         KeySchema:
           - AttributeName: id
             KeyType: HASH
+
+    StatisticsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-statistics-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: metric_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+        KeySchema:
+          - AttributeName: metric_id
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: tenant-index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    ReportsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-reports-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: report_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: report_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: tenant-date-index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    ReportSchedulesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-report-schedules-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: schedule_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: next_run
+            AttributeType: S
+        KeySchema:
+          - AttributeName: schedule_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: tenant-index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: next-run-index
+            KeySchema:
+              - AttributeName: next_run
+                KeyType: HASH
+            Projection:
+              ProjectionType: KEYS_ONLY
 
     # Buckets S3 con nombres auto-generados
     MainBucket:
