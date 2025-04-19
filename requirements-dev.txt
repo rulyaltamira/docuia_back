@@ -1,0 +1,5 @@
+# Dependencias para desarrollo y pruebas
+-r requirements.txt
+pytest==8.3.5
+pytest-cov==6.1.1
+moto==5.1.3 
