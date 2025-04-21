@@ -720,6 +720,33 @@ functions:
           method: delete
           cors: true
 
+  statsManager:
+    handler: src/handlers/stats/stats_manager.lambda_handler
+    description: Gestiona estadísticas y análisis
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/stats/stats_manager.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: stats/summary
+          method: get
+          cors: true
+      - http:
+          path: stats/documents
+          method: get
+          cors: true
+      - http:
+          path: stats/users
+          method: get
+          cors: true
+      - http:
+          path: stats/alerts
+          method: get
+          cors: true
+
 # Definición de recursos
 resources:
   Resources:

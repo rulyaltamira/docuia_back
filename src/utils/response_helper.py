@@ -7,13 +7,21 @@ def build_response(status_code, body=None, headers=None):
     """
     Construye una respuesta formateada para API Gateway
     """
+    # Establecer encabezados CORS predeterminados
+    default_headers = {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',  # Permisivo para desarrollo, ajustar en producción
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With',
+        'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,PUT,PATCH,DELETE'
+    }
+    
+    # Combinar con headers proporcionados
+    merged_headers = {**default_headers, **(headers or {})}
+    
     response = {
         'statusCode': status_code,
-        'headers': headers or {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',  # Para CORS
-            'Access-Control-Allow-Credentials': True
-        }
+        'headers': merged_headers
     }
     
     if body is not None:
@@ -60,3 +68,9 @@ def not_found(message="Resource not found"):
 def server_error(message="Internal server error"):
     """Respuesta 500 Internal Server Error"""
     return error_response(500, message)
+
+def options_response():
+    """
+    Respuesta para solicitudes OPTIONS preflight
+    """
+    return build_response(200, None)
