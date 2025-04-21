@@ -2,6 +2,14 @@
 # Utilidades para formatear respuestas de API
 
 import json
+import decimal
+
+# Clase para manejar la serialización de objetos Decimal a JSON
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)  # Convertir Decimal a float
+        return super(DecimalEncoder, self).default(obj)
 
 def build_response(status_code, body=None, headers=None):
     """
@@ -13,7 +21,7 @@ def build_response(status_code, body=None, headers=None):
         'Access-Control-Allow-Origin': '*',  # Permisivo para desarrollo, ajustar en producción
         'Access-Control-Allow-Credentials': 'true',
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With',
-        'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,PUT,PATCH,DELETE'
+        'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,PUT,DELETE'
     }
     
     # Combinar con headers proporcionados
@@ -25,7 +33,8 @@ def build_response(status_code, body=None, headers=None):
     }
     
     if body is not None:
-        response['body'] = json.dumps(body)
+        # Usar el codificador personalizado para manejar objetos Decimal
+        response['body'] = json.dumps(body, cls=DecimalEncoder)
         
     return response
 

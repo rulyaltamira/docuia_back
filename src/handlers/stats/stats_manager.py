@@ -6,6 +6,14 @@ import os
 import boto3
 import logging
 from datetime import datetime, timedelta
+import decimal
+
+# Clase para manejar la serialización de objetos Decimal a JSON
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)  # Convertir Decimal a float
+        return super(DecimalEncoder, self).default(obj)
 
 # Importar utilidades
 from src.utils.response_helper import success_response, error_response

@@ -9,6 +9,26 @@ provider:
   region: eu-west-1
   stage: ${opt:stage, 'dev'}
   
+  # Configuración de HTTP API para CORS global
+  httpApi:
+    cors:
+      allowedOrigins: 
+        - '*'
+      allowedHeaders:
+        - Content-Type
+        - X-Amz-Date
+        - Authorization
+        - X-Api-Key
+        - X-Amz-Security-Token
+        - X-Requested-With
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowCredentials: true
+  
   # Definir variables de entorno globales para todas las funciones
   environment:
     CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
@@ -22,6 +42,7 @@ provider:
     PERMISSIONS_TABLE: ${self:service}-permissions-${self:provider.stage}
     USER_ROLES_TABLE: ${self:service}-user-roles-${self:provider.stage}
     ROLE_PERMISSIONS_TABLE: ${self:service}-role-permissions-${self:provider.stage}
+    STATISTICS_TABLE: ${self:service}-statistics-${self:provider.stage}
     # Referencias a los nombres de bucket que se generarán automáticamente
     MAIN_BUCKET: !Ref MainBucket
     SES_BUCKET: !Ref SESBucket
@@ -481,13 +502,13 @@ functions:
           cors: true
 
   alertProcessor:
-    handler: src/handlers/alerts/alert_processor.lambda_handler
-    description: Procesador de alertas
+    handler: src/handlers/alerts/alert_notifier.lambda_handler
+    description: Procesador de alertas (temporal con alert_notifier)
     memorySize: 256
     timeout: 30
     package:
       patterns:
-        - 'src/handlers/alerts/alert_processor.py'
+        - 'src/handlers/alerts/alert_notifier.py'
         - 'src/utils/**'
     events:
       - http:
@@ -651,7 +672,7 @@ functions:
 
   statisticsApi:
     handler: src/handlers/stats/statistics_api.lambda_handler
-    description: APIs para consulta de estadísticas
+    description: API para consulta de estadísticas
     memorySize: 256
     timeout: 30
     package:
@@ -676,11 +697,19 @@ functions:
           method: get
           cors: true
       - http:
+          path: stats/critical-documents
+          method: get
+          cors: true
+      - http:
           path: stats/summary
           method: get
           cors: true
       - http:
           path: stats/trends
+          method: get
+          cors: true
+      - http:
+          path: stats/key-dates
           method: get
           cors: true
 
@@ -876,14 +905,14 @@ resources:
     StatisticsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:service}-statistics-${self:provider.stage}
+        TableName: ${self:provider.environment.STATISTICS_TABLE}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: metric_id
             AttributeType: S
-          - AttributeName: tenant_id
-            AttributeType: S
           - AttributeName: timestamp
+            AttributeType: S
+          - AttributeName: tenant_id
             AttributeType: S
         KeySchema:
           - AttributeName: metric_id

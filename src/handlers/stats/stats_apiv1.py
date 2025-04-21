@@ -22,14 +22,12 @@ users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
 
 # Inicializar la tabla de estadísticas solo si está configurada
 statistics_table = None
-statistics_table_name = os.environ.get('STATISTICS_TABLE')
-if statistics_table_name:
+if os.environ.get('STATISTICS_TABLE'):
     try:
-        statistics_table = dynamodb.Table(statistics_table_name)
-        logger.info(f"Tabla de estadísticas inicializada correctamente: {statistics_table_name}")
+        statistics_table = dynamodb.Table(os.environ.get('STATISTICS_TABLE'))
+        logger.info("Tabla de estadísticas inicializada correctamente")
     except Exception as e:
         logger.warning(f"No se pudo inicializar la tabla de estadísticas: {str(e)}")
-        # Continuamos con statistics_table = None
 
 # Ayudante para serialización JSON de valores Decimal
 class DecimalEncoder(json.JSONEncoder):
@@ -62,17 +60,11 @@ def lambda_handler(event, context):
         return get_summary_stats(event, context)
     elif http_method == 'GET' and path == '/stats/trends':
         return get_trends_stats(event, context)
-    elif http_method == 'GET' and path == '/stats/key-dates':
-        return get_key_dates(event, context)
     else:
         logger.warning(f"Operación no válida: {http_method} {path}")
         return {
             'statusCode': 400,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({'error': 'Operación no válida'})
         }
 
@@ -114,17 +106,21 @@ def get_document_stats(event, context):
         start_date_str = start_date.isoformat()
         end_date_str = end_date.isoformat()
         
-        # Consultar documentos en el rango de fecha
-        documents_response = contracts_table.scan(
-            FilterExpression="tenant_id = :t AND created_at BETWEEN :start AND :end",
-            ExpressionAttributeValues={
-                ':t': tenant_id,
-                ':start': start_date_str,
-                ':end': end_date_str
-            }
-        )
-        
-        documents = documents_response.get('Items', [])
+        try:
+            # Consultar documentos en el rango de fecha
+            documents_response = contracts_table.scan(
+                FilterExpression="tenant_id = :t AND created_at BETWEEN :start AND :end",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':start': start_date_str,
+                    ':end': end_date_str
+                }
+            )
+            
+            documents = documents_response.get('Items', [])
+        except Exception as e:
+            logger.error(f"Error consultando documentos: {str(e)}")
+            documents = []
         
         # Conteos por estado
         status_counts = {}
@@ -148,12 +144,17 @@ def get_document_stats(event, context):
         time_series = generate_document_time_series(documents, period)
         
         # Estadísticas de procesamiento
-        processing_times = [
-            (datetime.fromisoformat(doc.get('processed_at', '')) - 
-             datetime.fromisoformat(doc.get('created_at', ''))).total_seconds() / 60
-            for doc in documents 
-            if 'processed_at' in doc and 'created_at' in doc
-        ]
+        processing_times = []
+        for doc in documents:
+            if 'processed_at' in doc and 'created_at' in doc:
+                try:
+                    created_at = datetime.fromisoformat(doc.get('created_at', ''))
+                    processed_at = datetime.fromisoformat(doc.get('processed_at', ''))
+                    time_diff = (processed_at - created_at).total_seconds() / 60
+                    processing_times.append(time_diff)
+                except (ValueError, TypeError):
+                    # Ignorar entradas con formato incorrecto
+                    pass
         
         avg_processing_time = sum(processing_times) / len(processing_times) if processing_times else 0
         
@@ -226,11 +227,20 @@ def get_user_stats(event, context):
         # Usuarios con actividad en los últimos 7 días
         now = datetime.now()
         week_ago = (now - timedelta(days=7)).isoformat()
-        active_users = sum(1 for user in users if user.get('last_login', '') > week_ago)
+        
+        active_users = 0
+        for user in users:
+            last_login = user.get('last_login', '')
+            if last_login and last_login > week_ago:
+                active_users += 1
         
         # Usuarios con actividad en los últimos 30 días
         month_ago = (now - timedelta(days=30)).isoformat()
-        monthly_active_users = sum(1 for user in users if user.get('last_login', '') > month_ago)
+        monthly_active_users = 0
+        for user in users:
+            last_login = user.get('last_login', '')
+            if last_login and last_login > month_ago:
+                monthly_active_users += 1
         
         # Construir respuesta
         stats = {
@@ -296,26 +306,34 @@ def get_processing_stats(event, context):
         start_date_str = start_date.isoformat()
         end_date_str = end_date.isoformat()
         
-        # Consultar documentos procesados en el rango de fecha
-        documents_response = contracts_table.scan(
-            FilterExpression="tenant_id = :t AND processed_at BETWEEN :start AND :end",
-            ExpressionAttributeValues={
-                ':t': tenant_id,
-                ':start': start_date_str,
-                ':end': end_date_str
-            }
-        )
-        
-        processed_docs = documents_response.get('Items', [])
+        try:
+            # Consultar documentos procesados en el rango de fecha
+            documents_response = contracts_table.scan(
+                FilterExpression="tenant_id = :t AND processed_at BETWEEN :start AND :end",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':start': start_date_str,
+                    ':end': end_date_str
+                }
+            )
+            
+            processed_docs = documents_response.get('Items', [])
+        except Exception as e:
+            logger.error(f"Error consultando documentos procesados: {str(e)}")
+            processed_docs = []
         
         # Calcular tiempos de procesamiento
         processing_times = []
         for doc in processed_docs:
             if 'created_at' in doc and 'processed_at' in doc:
-                created = datetime.fromisoformat(doc['created_at'])
-                processed = datetime.fromisoformat(doc['processed_at'])
-                time_diff = (processed - created).total_seconds() / 60  # en minutos
-                processing_times.append(time_diff)
+                try:
+                    created = datetime.fromisoformat(doc['created_at'])
+                    processed = datetime.fromisoformat(doc['processed_at'])
+                    time_diff = (processed - created).total_seconds() / 60  # en minutos
+                    processing_times.append(time_diff)
+                except (ValueError, TypeError):
+                    # Ignorar documentos con fechas inválidas
+                    pass
         
         # Estadísticas de tiempos
         stats = {
@@ -392,18 +410,22 @@ def get_storage_stats(event, context):
         storage_limit = tenant.get('limits', {}).get('max_storage_mb', -1)
         
         # Consultar todos los documentos activos
-        documents_response = contracts_table.scan(
-            FilterExpression="tenant_id = :t AND #status <> :deleted",
-            ExpressionAttributeValues={
-                ':t': tenant_id,
-                ':deleted': 'deleted'
-            },
-            ExpressionAttributeNames={
-                '#status': 'status'
-            }
-        )
-        
-        documents = documents_response.get('Items', [])
+        try:
+            documents_response = contracts_table.scan(
+                FilterExpression="tenant_id = :t AND #status <> :deleted",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':deleted': 'deleted'
+                },
+                ExpressionAttributeNames={
+                    '#status': 'status'
+                }
+            )
+            
+            documents = documents_response.get('Items', [])
+        except Exception as e:
+            logger.error(f"Error consultando documentos activos: {str(e)}")
+            documents = []
         
         # Agrupar por tipo de archivo
         by_type = {}
@@ -494,19 +516,23 @@ def get_critical_documents(event, context):
         today = datetime.now()
         thirty_days_future = (today + timedelta(days=30)).strftime("%Y-%m")
         
-        response = contracts_table.scan(
-            FilterExpression="tenant_id = :t AND #status <> :deleted AND begins_with(expiration_date, :future)",
-            ExpressionAttributeValues={
-                ':t': tenant_id,
-                ':deleted': 'deleted',
-                ':future': thirty_days_future
-            },
-            ExpressionAttributeNames={
-                '#status': 'status'
-            }
-        )
-        
-        documents = response.get('Items', [])
+        try:
+            response = contracts_table.scan(
+                FilterExpression="tenant_id = :t AND #status <> :deleted AND begins_with(expiration_date, :future)",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':deleted': 'deleted',
+                    ':future': thirty_days_future
+                },
+                ExpressionAttributeNames={
+                    '#status': 'status'
+                }
+            )
+            
+            documents = response.get('Items', [])
+        except Exception as e:
+            logger.error(f"Error consultando documentos con fecha de vencimiento: {str(e)}")
+            documents = []
         
         # Ordenar por fecha de vencimiento (los más próximos primero)
         documents.sort(key=lambda x: x.get('expiration_date', '9999-12-31'))
@@ -645,8 +671,13 @@ def get_trends_stats(event, context):
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
-        # Obtener estadísticas de la tabla de estadísticas
-        stats = get_time_series_stats(tenant_id, metric_type, period)
+        # Verificar si se puede usar la tabla de estadísticas
+        if statistics_table:
+            # Implementación utilizando la tabla de estadísticas
+            stats = get_time_series_from_stats_table(tenant_id, metric_type, period)
+        else:
+            # Implementación alternativa usando las tablas de operaciones
+            stats = get_time_series_from_operations(tenant_id, metric_type, period)
         
         return {
             'statusCode': 200,
@@ -659,114 +690,6 @@ def get_trends_stats(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
-        }
-
-def get_key_dates(event, context):
-    """
-    Obtiene fechas clave próximas (vencimientos, renovaciones, etc.)
-    """
-    try:
-        # Obtener parámetros
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        days = int(query_params.get('days', 30))  # Días hacia el futuro
-        limit = int(query_params.get('limit', 10))  # Número máximo de resultados
-        
-        if not tenant_id:
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Credentials': True
-                },
-                'body': json.dumps({'error': 'Se requiere tenant_id'})
-            }
-        
-        logger.info(f"Obteniendo fechas clave para tenant: {tenant_id}, días: {days}, límite: {limit}")
-        
-        # Calcular la fecha límite hacia el futuro
-        today = datetime.now()
-        future_date = (today + timedelta(days=days)).isoformat()
-        
-        # Consultar documentos con fechas clave en el período especificado
-        key_dates = []
-        
-        try:
-            # Buscar documentos con fechas de vencimiento
-            response = contracts_table.scan(
-                FilterExpression="tenant_id = :t AND #status <> :deleted AND expiration_date BETWEEN :today AND :future",
-                ExpressionAttributeValues={
-                    ':t': tenant_id,
-                    ':deleted': 'deleted',
-                    ':today': today.isoformat(),
-                    ':future': future_date
-                },
-                ExpressionAttributeNames={
-                    '#status': 'status'
-                }
-            )
-            
-            # Procesar documentos con fechas de vencimiento
-            for doc in response.get('Items', []):
-                if 'expiration_date' in doc:
-                    try:
-                        exp_date = datetime.fromisoformat(doc['expiration_date'])
-                        days_remaining = (exp_date - today).days
-                        
-                        key_dates.append({
-                            'document_id': doc.get('id'),
-                            'document_name': doc.get('filename', 'Documento sin nombre'),
-                            'date_type': 'expiration',
-                            'date': doc['expiration_date'],
-                            'days_remaining': days_remaining,
-                            'description': f"Vencimiento de documento: {doc.get('filename', 'Documento sin nombre')}"
-                        })
-                    except (ValueError, TypeError):
-                        # Ignorar fechas con formato incorrecto
-                        pass
-            
-            # Ordenar fechas por proximidad (más cercanas primero)
-            key_dates.sort(key=lambda x: x.get('days_remaining', 0))
-            
-            # Limitar resultados según el parámetro
-            key_dates = key_dates[:limit]
-            
-        except Exception as e:
-            logger.error(f"Error consultando fechas clave: {str(e)}")
-            return {
-                'statusCode': 500,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Credentials': True
-                },
-                'body': json.dumps({'error': f"Error consultando fechas clave: {str(e)}"})
-            }
-        
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
-            'body': json.dumps({
-                'key_dates': key_dates,
-                'count': len(key_dates)
-            }, cls=DecimalEncoder)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo fechas clave: {str(e)}")
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
             'body': json.dumps({'error': str(e)})
         }
 
@@ -910,7 +833,7 @@ def count_processed_documents_in_month(tenant_id, month_str):
         logger.error(f"Error contando documentos procesados: {str(e)}")
         return 0
 
-def get_time_series_stats(tenant_id, metric_type, period):
+def get_time_series_from_stats_table(tenant_id, metric_type, period):
     """
     Obtiene estadísticas de series temporales desde la tabla de estadísticas
     
@@ -933,9 +856,74 @@ def get_time_series_stats(tenant_id, metric_type, period):
         else:
             raise ValueError(f"Tipo de métrica no válido: {metric_type}")
         
-        # Calcular rango de tiempo
+        # Determinar rango de fechas para la consulta
         end_date = datetime.now()
+        if period == 'day':
+            start_date = end_date - timedelta(days=1)
+        elif period == 'week':
+            start_date = end_date - timedelta(days=7)
+        elif period == 'month':
+            start_date = end_date - timedelta(days=30)
+        elif period == 'year':
+            start_date = end_date - timedelta(days=365)
+        else:
+            raise ValueError(f"Período no válido: {period}")
         
+        # Consultar estadísticas
+        response = statistics_table.query(
+            KeyConditionExpression="metric_id = :m AND #timestamp BETWEEN :start AND :end",
+            FilterExpression="tenant_id = :t",
+            ExpressionAttributeNames={
+                "#timestamp": "timestamp"
+            },
+            ExpressionAttributeValues={
+                ":m": metric_id,
+                ":t": tenant_id,
+                ":start": start_date.isoformat(),
+                ":end": end_date.isoformat()
+            }
+        )
+        
+        metrics = response.get('Items', [])
+        
+        # Ordenar por timestamp
+        metrics.sort(key=lambda x: x.get('timestamp', ''))
+        
+        # Convertir a serie temporal
+        time_series = []
+        for metric in metrics:
+            time_series.append({
+                'timestamp': metric.get('timestamp', ''),
+                'value': metric.get('value', 0)
+            })
+        
+        return {
+            'tenant_id': tenant_id,
+            'metric_type': metric_type,
+            'period': period,
+            'time_series': time_series
+        }
+    
+    except Exception as e:
+        logger.error(f"Error obteniendo series temporales desde tabla stats: {str(e)}")
+        # Fallback a método alternativo
+        return get_time_series_from_operations(tenant_id, metric_type, period)
+
+def get_time_series_from_operations(tenant_id, metric_type, period):
+    """
+    Obtiene series temporales directamente de tablas operativas como alternativa
+    
+    Args:
+        tenant_id (str): ID del tenant
+        metric_type (str): Tipo de métrica (documents, users, storage)
+        period (str): Período de tiempo (day, week, month, year)
+        
+    Returns:
+        dict: Estadísticas de series temporales
+    """
+    try:
+        # Determinar rango de fechas para la consulta
+        end_date = datetime.now()
         if period == 'day':
             start_date = end_date - timedelta(days=1)
             group_by = 'hour'
@@ -950,13 +938,6 @@ def get_time_series_stats(tenant_id, metric_type, period):
             group_by = 'month'
         else:
             raise ValueError(f"Período no válido: {period}")
-        
-        # Para series temporales, necesitamos consultar la tabla de contratos
-        # ya que la tabla de estadísticas podría no tener suficientes puntos de datos históricos
-        
-        # En una implementación real, esto se haría consultando la tabla de estadísticas
-        # que tendría métricas agregadas por período. Como es un ejemplo, simularemos
-        # obteniendo datos directamente de las tablas operativas.
         
         time_series = []
         
@@ -997,7 +978,47 @@ def get_time_series_stats(tenant_id, metric_type, period):
                     'value': count
                 })
         
-        # [Similar implementations for users and storage would go here]
+        elif metric_type == 'users':
+            # Para usuarios, no tenemos suficiente información histórica
+            # Simplemente devolvemos el conteo actual
+            response = users_table.scan(
+                FilterExpression="tenant_id = :t",
+                ExpressionAttributeValues={':t': tenant_id}
+            )
+            
+            users = response.get('Items', [])
+            
+            time_series.append({
+                'timestamp': datetime.now().isoformat(),
+                'value': len(users)
+            })
+            
+        elif metric_type == 'storage':
+            # Para almacenamiento, calculamos el actual
+            total_size_bytes = 0
+            
+            # Consultar documentos activos
+            documents_response = contracts_table.scan(
+                FilterExpression="tenant_id = :t AND #status <> :deleted",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':deleted': 'deleted'
+                },
+                ExpressionAttributeNames={
+                    '#status': 'status'
+                }
+            )
+            
+            documents = documents_response.get('Items', [])
+            
+            # Calcular tamaño total
+            total_size_bytes = sum(doc.get('file_size', 0) for doc in documents)
+            total_size_mb = total_size_bytes / (1024 * 1024)
+            
+            time_series.append({
+                'timestamp': datetime.now().isoformat(),
+                'value': round(total_size_mb, 2)
+            })
         
         return {
             'tenant_id': tenant_id,
@@ -1007,7 +1028,7 @@ def get_time_series_stats(tenant_id, metric_type, period):
         }
         
     except Exception as e:
-        logger.error(f"Error obteniendo series temporales: {str(e)}")
+        logger.error(f"Error obteniendo series temporales desde operaciones: {str(e)}")
         return {
             'tenant_id': tenant_id,
             'metric_type': metric_type,
