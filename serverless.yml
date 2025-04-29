@@ -21,6 +21,7 @@ provider:
         - X-Api-Key
         - X-Amz-Security-Token
         - X-Requested-With
+        - x-tenant-id
       allowedMethods:
         - GET
         - POST
@@ -140,30 +141,29 @@ custom:
   pythonRequirements:
     dockerizePip: true
     zip: true
-    slim: true          # Elimina archivos innecesarios de las dependencias
-    slimPatterns:
-      - '**/*.egg-info*'
-      - '**/*.dist-info*'
-      - '**/*.pyc'
-      - '**/__pycache__/**'
-      - '**/*.so'
-      - '**/*.pyd'
-      - '**/*.pth'
-      - '**/tests/**'
-      - '**/.mypy_cache/**'
-    noDeploy:
-      - pytest
-      - pytest-cov
-      - coverage
-      - black
-      - flake8
-      - mypy
-      - pylint
-      - boto3     # No incluir boto3, ya está disponible en el entorno Lambda
-      - botocore  # No incluir botocore, ya está disponible en el entorno Lambda
+    slim: false
+    useDownloadCache: true
+    useStaticCache: true
+    pipCmdExtraArgs:
+      - "--no-cache-dir"
 
 # Definición de funciones
 functions:
+  corsHandler:
+    handler: src/handlers/cors_handler.lambda_handler
+    description: Maneja solicitudes OPTIONS para CORS preflight
+    memorySize: 128
+    timeout: 5
+    package:
+      patterns:
+        - 'src/handlers/cors_handler.py'
+        - 'src/utils/cors_middleware.py'
+    events:
+      - http:
+          path: '{proxy+}'
+          method: options
+          cors: true
+
   emailHandler:
     handler: src/handlers/email_handler.lambda_handler
     description: Procesa emails recibidos por SES
@@ -541,6 +541,10 @@ functions:
       patterns:
         - 'src/handlers/alerts/alert_notifier.py'
         - 'src/utils/**'
+        - '!node_modules/**'
+        - '!**/__pycache__/**'
+    environment:
+      PYTHONPATH: "./:/opt/python"
     events:
       - http:
           path: alerts/notify
@@ -555,6 +559,19 @@ functions:
           method: get
           cors: true
     iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:Query
+          - dynamodb:Scan
+        Resource:
+          - !GetAtt AlertsTable.Arn
+          - !GetAtt AlertRulesTable.Arn
+          - !GetAtt AlertPreferencesTable.Arn
+          - !GetAtt TenantsTable.Arn
+          - !GetAtt UsersTable.Arn
       - Effect: Allow
         Action:
           - ses:SendEmail

@@ -1,13 +1,24 @@
 # docpilot-backend/src/handlers/alerts/alert_notifier.py
-# Notificador de alertas para el sistema DocPilot
+"""
+Notificador de alertas para el sistema DocPilot
+
+Este módulo gestiona el envío de notificaciones de alertas a través de diferentes canales:
+- Email
+- Dashboard
+- Webhook
+- SMS (preparado para implementación futura)
+
+Se puede invocar desde SQS, Lambda o API Gateway.
+"""
 
 import json
 import os
 import boto3
 import logging
-import requests
 from datetime import datetime
-from botocore.exceptions import ClientError
+import urllib.request
+import urllib.error
+import urllib.parse
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -23,55 +34,76 @@ tenants_table = dynamodb.Table(os.environ.get('TENANTS_TABLE'))
 def lambda_handler(event, context):
     """
     Envía notificaciones de alerta a través de diferentes canales.
-    Puede procesarse:
-    1. Por eventos de SQS (recomendado para producción)
-    2. Directamente desde otra función Lambda
-    3. Manualmente a través de API Gateway
     """
-    # Determinar tipo de invocación
-    if 'Records' in event:
-        # Invocación desde SQS
-        logger.info(f"Procesando {len(event['Records'])} mensajes de SQS")
-        processed_alerts = 0
+    try:
+        logger.info(f"Evento recibido: {json.dumps(event)}")
         
-        for record in event['Records']:
-            try:
-                message_body = json.loads(record['body'])
-                result = process_alert_notification(message_body)
-                if result.get('success', False):
-                    processed_alerts += 1
-            except Exception as e:
-                logger.error(f"Error procesando mensaje SQS: {str(e)}")
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'message': f'Procesados {processed_alerts} de {len(event["Records"])} mensajes'
-            })
-        }
-    
-    elif event.get('httpMethod'):
-        # Invocación desde API Gateway
-        http_method = event.get('httpMethod', '')
-        path = event.get('path', '')
-        
-        if http_method == 'POST' and path == '/alerts/notify':
-            # Procesar la notificación directamente
-            body = json.loads(event.get('body', '{}'))
-            result = process_alert_notification(body)
+        # Determinar tipo de invocación
+        if 'Records' in event:
+            # Invocación desde SQS
+            logger.info(f"Procesando {len(event['Records'])} mensajes de SQS")
+            processed_alerts = 0
             
-            if result.get('success', False):
-                return {
-                    'statusCode': 200,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'message': 'Notificación enviada correctamente',
-                        'details': result
-                    })
-                }
+            for record in event['Records']:
+                try:
+                    message_body = json.loads(record['body'])
+                    result = process_alert_notification(message_body)
+                    if result.get('success', False):
+                        processed_alerts += 1
+                except Exception as e:
+                    logger.error(f"Error procesando mensaje SQS: {str(e)}")
+            
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': f'Procesados {processed_alerts} de {len(event["Records"])} mensajes'
+                })
+            }
+        
+        elif event.get('httpMethod'):
+            # Invocación desde API Gateway
+            http_method = event.get('httpMethod', '')
+            path = event.get('path', '')
+            
+            if http_method == 'POST' and path == '/alerts/notify':
+                # Procesar la notificación directamente
+                body = json.loads(event.get('body', '{}'))
+                result = process_alert_notification(body)
+                
+                if result.get('success', False):
+                    return {
+                        'statusCode': 200,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'message': 'Notificación enviada correctamente',
+                            'details': result
+                        })
+                    }
+                else:
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'error': 'Error enviando notificación',
+                            'details': result.get('message', 'Error desconocido')
+                        })
+                    }
+            
+            elif http_method == 'POST' and path == '/alerts/preferences':
+                return update_alert_preferences(event, context)
+            
+            elif http_method == 'GET' and path == '/alerts/preferences':
+                return get_alert_preferences(event, context)
+            
+            elif http_method == 'GET' and path == '/alerts/summary':
+                return get_alerts_summary(event, context)
+            
             else:
                 return {
                     'statusCode': 400,
@@ -79,32 +111,37 @@ def lambda_handler(event, context):
                         'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*'
                     },
-                    'body': json.dumps({
-                        'error': 'Error enviando notificación',
-                        'details': result.get('message', 'Error desconocido')
-                    })
+                    'body': json.dumps({'error': 'Operación no válida'})
                 }
         
-        elif http_method == 'POST' and path == '/alerts/preferences':
-            return update_alert_preferences(event, context)
-        
-        elif http_method == 'GET' and path == '/alerts/preferences':
-            return get_alert_preferences(event, context)
-        
         else:
+            # Invocación directa desde otra función Lambda
+            logger.info("Invocación directa desde Lambda")
+            return process_alert_notification(event)
+            
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error en lambda_handler: {str(e)}")
+        logger.error(f"Traceback: {error_trace}")
+        
+        # Si la invocación fue desde API Gateway, retornar error 500
+        if event.get('httpMethod'):
             return {
-                'statusCode': 400,
+                'statusCode': 500,
                 'headers': {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*'
                 },
-                'body': json.dumps({'error': 'Operación no válida'})
+                'body': json.dumps({
+                    'error': 'Error interno del servidor',
+                    'details': str(e)
+                })
             }
-    
-    else:
-        # Invocación directa desde otra función Lambda
-        logger.info("Invocación directa desde Lambda")
-        return process_alert_notification(event)
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 def process_alert_notification(event_data):
     """
@@ -117,6 +154,8 @@ def process_alert_notification(event_data):
         dict: Resultado del procesamiento
     """
     try:
+        logger.info(f"Procesando datos de alerta: {json.dumps(event_data)}")
+        
         # Validar campos requeridos
         if 'alert_id' not in event_data:
             return {
@@ -199,7 +238,10 @@ def process_alert_notification(event_data):
         }
         
     except Exception as e:
-        logger.error(f"Error procesando notificación de alerta: {str(e)}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error procesando alerta: {str(e)}")
+        logger.error(f"Traceback: {error_trace}")
         return {
             'success': False,
             'message': f"Error interno: {str(e)}"
@@ -516,7 +558,10 @@ def send_webhook_notification(alert_data, tenant_id):
         if 'event_data' in alert_data:
             webhook_data['event_data'] = alert_data['event_data']
         
-        # Si hay un secreto configurado, añadir firma
+        # Preparar los datos para la solicitud
+        data = json.dumps(webhook_data).encode('utf-8')
+        
+        # Preparar los headers
         headers = {
             'Content-Type': 'application/json'
         }
@@ -526,34 +571,40 @@ def send_webhook_notification(alert_data, tenant_id):
             # Este es un placeholder simplificado
             headers['X-DocPilot-Signature'] = f"t={int(datetime.now().timestamp())},v1=signature"
         
-        # Enviar solicitud webhook
-        response = requests.post(
+        # Crear la solicitud
+        req = urllib.request.Request(
             webhook_url,
-            json=webhook_data,
+            data=data,
             headers=headers,
-            timeout=5  # Timeout de 5 segundos
+            method='POST'
         )
         
-        if response.ok:
-            logger.info(f"Webhook enviado correctamente: {response.status_code}")
-            return {
-                'success': True,
-                'status_code': response.status_code
-            }
-        else:
-            logger.warning(f"Error en webhook: {response.status_code} - {response.text}")
+        # Enviar la solicitud con un timeout de 5 segundos
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                status_code = response.getcode()
+                
+                if 200 <= status_code < 300:
+                    logger.info(f"Webhook enviado correctamente: {status_code}")
+                    return {
+                        'success': True,
+                        'status_code': status_code
+                    }
+                else:
+                    response_text = response.read().decode('utf-8')
+                    logger.warning(f"Error en webhook: {status_code} - {response_text}")
+                    return {
+                        'success': False,
+                        'status_code': status_code,
+                        'message': response_text
+                    }
+        except urllib.error.URLError as e:
+            logger.error(f"Error de conexión webhook: {str(e)}")
             return {
                 'success': False,
-                'status_code': response.status_code,
-                'message': response.text
+                'message': f"Error de conexión: {str(e)}"
             }
             
-    except requests.RequestException as e:
-        logger.error(f"Error de conexión webhook: {str(e)}")
-        return {
-            'success': False,
-            'message': f"Error de conexión: {str(e)}"
-        }
     except Exception as e:
         logger.error(f"Error enviando webhook: {str(e)}")
         return {
@@ -614,8 +665,8 @@ def send_email(sender, recipient, subject, body_html, body_text):
             }
         )
         return True
-    except ClientError as e:
-        logger.error(f"Error SES: {e.response['Error']['Message']}")
+    except Exception as e:
+        logger.error(f"Error SES: {str(e)}")
         raise
 
 def update_alert_preferences(event, context):
@@ -787,7 +838,7 @@ def get_alert_preferences(event, context):
                     'alert_type': 'all',
                     'min_severity': user_preferences.get('min_severity', 'low'),
                     'channels': user_preferences.get('channels', ['email', 'dashboard']),
-                    'updated_at': user_preferences.get('updated_at', '')
+                     'updated_at': user_preferences.get('updated_at', '')
                 }]
         
         return {
@@ -810,6 +861,119 @@ def get_alert_preferences(event, context):
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({'error': f"Error interno: {str(e)}"})
+        }
+
+def get_alerts_summary(event, context):
+    """
+    Obtiene un resumen de las alertas para un tenant específico
+    """
+    try:
+        # Obtener tenant_id de los query params
+        query_params = event.get('queryStringParameters', {}) or {}
+        tenant_id = query_params.get('tenant_id')
+        user_id = query_params.get('user_id')
+        
+        if not tenant_id:
+            logger.error("Falta parámetro tenant_id")
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+            }
+            
+        if not user_id:
+            logger.error("Falta parámetro user_id")
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'Se requiere user_id como parámetro'})
+            }
+        
+        logger.info(f"Obteniendo resumen de alertas para tenant: {tenant_id}")
+        
+        # Consultar alertas del tenant
+        response = alerts_table.scan(
+            FilterExpression="tenant_id = :t",
+            ExpressionAttributeValues={
+                ':t': tenant_id
+            }
+        )
+        
+        alerts = response.get('Items', [])
+        
+        # Contar alertas por severidad
+        severity_counts = {
+            'critical': 0,
+            'high': 0,
+            'medium': 0,
+            'low': 0,
+            'info': 0
+        }
+        
+        # Contar alertas por estado
+        status_counts = {
+            'new': 0,
+            'acknowledged': 0,
+            'resolved': 0,
+            'dismissed': 0
+        }
+        
+        # Alertas recientes
+        recent_alerts = []
+        
+        for alert in alerts:
+            # Contar por severidad
+            severity = alert.get('severity')
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+                
+            # Contar por estado
+            status = alert.get('status')
+            if status in status_counts:
+                status_counts[status] += 1
+                
+            # Obtener alertas recientes (últimas 5)
+            if status in ['new', 'acknowledged']:
+                recent_alerts.append(alert)
+        
+        # Ordenar alertas recientes por fecha (más recientes primero)
+        recent_alerts.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        recent_alerts = recent_alerts[:5]  # Limitar a 5 alertas
+        
+        # Construir resumen
+        summary = {
+            'tenant_id': tenant_id,
+            'total_alerts': len(alerts),
+            'unresolved_alerts': status_counts['new'] + status_counts['acknowledged'],
+            'by_severity': severity_counts,
+            'by_status': status_counts,
+            'recent_alerts': recent_alerts
+        }
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps(summary)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo resumen de alertas: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': str(e)})
         }
 
 # Funciones de utilidad

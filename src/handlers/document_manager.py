@@ -5,6 +5,7 @@ import boto3
 import logging
 from datetime import datetime, timedelta
 import hashlib
+from decimal import Decimal
 
 # Importar módulos de utilidades
 from src.utils.s3_path_helper import decode_s3_key, extract_filename_from_key
@@ -17,6 +18,13 @@ s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 contracts_table = dynamodb.Table(os.environ.get('CONTRACTS_TABLE'))
 MAIN_BUCKET = os.environ.get('MAIN_BUCKET')
+
+# Codificador personalizado para manejar tipos Decimal
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
 
 def lambda_handler(event, context):
     """Maneja operaciones para gestionar documentos"""
@@ -45,7 +53,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 400,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': 'Operación no válida'})
+            'body': json.dumps({'error': 'Operación no válida'}, cls=DecimalEncoder)
         }
 
 def list_documents(event, context):
@@ -60,7 +68,7 @@ def list_documents(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Listando documentos para tenant: {tenant_id}")
@@ -91,7 +99,7 @@ def list_documents(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'documents': documents})
+            'body': json.dumps({'documents': documents}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -99,7 +107,7 @@ def list_documents(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_document(event, context):
@@ -117,7 +125,7 @@ def get_document(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Obteniendo documento: {document_id}, tenant: {tenant_id}")
@@ -130,7 +138,7 @@ def get_document(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Documento no encontrado'})
+                'body': json.dumps({'error': 'Documento no encontrado'}, cls=DecimalEncoder)
             }
         
         document = response['Item']
@@ -141,7 +149,7 @@ def get_document(event, context):
             return {
                 'statusCode': 403,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Acceso denegado a este documento'})
+                'body': json.dumps({'error': 'Acceso denegado a este documento'}, cls=DecimalEncoder)
             }
         
         # Asegurar que los nombres de archivos estén decodificados para visualización
@@ -157,7 +165,7 @@ def get_document(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'document': document})
+            'body': json.dumps({'document': document}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -165,7 +173,7 @@ def get_document(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def generate_view_url(event, context):
@@ -183,7 +191,7 @@ def generate_view_url(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Generando URL de visualización para documento: {document_id}, tenant: {tenant_id}")
@@ -196,7 +204,7 @@ def generate_view_url(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Documento no encontrado'})
+                'body': json.dumps({'error': 'Documento no encontrado'}, cls=DecimalEncoder)
             }
         
         document = response['Item']
@@ -207,7 +215,7 @@ def generate_view_url(event, context):
             return {
                 'statusCode': 403,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Acceso denegado a este documento'})
+                'body': json.dumps({'error': 'Acceso denegado a este documento'}, cls=DecimalEncoder)
             }
         
         # Generar URL prefirmada para visualizar el documento
@@ -218,7 +226,7 @@ def generate_view_url(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Información de archivo incompleta'})
+                'body': json.dumps({'error': 'Información de archivo incompleta'}, cls=DecimalEncoder)
             }
         
         url = s3.generate_presigned_url(
@@ -246,7 +254,7 @@ def generate_view_url(event, context):
                 'view_url': url,
                 'filename': filename,
                 'expires_in': 3600
-            })
+            }, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -254,7 +262,7 @@ def generate_view_url(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_document_summary(event, context):
@@ -272,7 +280,7 @@ def get_document_summary(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Obteniendo resumen para documento: {document_id}, tenant: {tenant_id}")
@@ -285,7 +293,7 @@ def get_document_summary(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Documento no encontrado'})
+                'body': json.dumps({'error': 'Documento no encontrado'}, cls=DecimalEncoder)
             }
         
         document = response['Item']
@@ -296,7 +304,7 @@ def get_document_summary(event, context):
             return {
                 'statusCode': 403,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Acceso denegado a este documento'})
+                'body': json.dumps({'error': 'Acceso denegado a este documento'}, cls=DecimalEncoder)
             }
         
         # Verificar si es un documento duplicado
@@ -311,7 +319,7 @@ def get_document_summary(event, context):
                     return {
                         'statusCode': 200,
                         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps(original_doc['processing_result'])
+                        'body': json.dumps(original_doc['processing_result'], cls=DecimalEncoder)
                     }
         
         # Verificar si el resumen ya está en el registro DynamoDB
@@ -332,20 +340,20 @@ def get_document_summary(event, context):
                 return {
                     'statusCode': 404,
                     'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'error': 'Resumen no encontrado'})
+                    'body': json.dumps({'error': 'Resumen no encontrado'}, cls=DecimalEncoder)
                 }
         else:
             logger.error(f"Documento no procesado: {document_id}")
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Documento no procesado'})
+                'body': json.dumps({'error': 'Documento no procesado'}, cls=DecimalEncoder)
             }
         
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps(summary)
+            'body': json.dumps(summary, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -353,7 +361,7 @@ def get_document_summary(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def delete_document(event, context):
@@ -371,7 +379,7 @@ def delete_document(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Eliminando documento: {document_id}, tenant: {tenant_id}")
@@ -384,7 +392,7 @@ def delete_document(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Documento no encontrado'})
+                'body': json.dumps({'error': 'Documento no encontrado'}, cls=DecimalEncoder)
             }
         
         document = response['Item']
@@ -395,7 +403,7 @@ def delete_document(event, context):
             return {
                 'statusCode': 403,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Acceso denegado a este documento'})
+                'body': json.dumps({'error': 'Acceso denegado a este documento'}, cls=DecimalEncoder)
             }
         
         # Marcar como eliminado en DynamoDB
@@ -416,7 +424,7 @@ def delete_document(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'message': 'Documento eliminado correctamente'})
+            'body': json.dumps({'message': 'Documento eliminado correctamente'}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -424,7 +432,7 @@ def delete_document(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_stats(event, context):
@@ -439,7 +447,7 @@ def get_stats(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Obteniendo estadísticas para tenant: {tenant_id}")
@@ -513,7 +521,7 @@ def get_stats(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps(stats)
+            'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -521,7 +529,7 @@ def get_stats(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def check_duplicate(event, context):
@@ -537,7 +545,7 @@ def check_duplicate(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requieren tenant_id y hash como parámetros'})
+                'body': json.dumps({'error': 'Se requieren tenant_id y hash como parámetros'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Verificando duplicados para tenant: {tenant_id}, hash: {file_hash}")
@@ -566,7 +574,7 @@ def check_duplicate(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps(result)
+            'body': json.dumps(result, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -574,5 +582,5 @@ def check_duplicate(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
