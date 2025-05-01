@@ -19,6 +19,7 @@ from datetime import datetime
 import urllib.request
 import urllib.error
 import urllib.parse
+from src.utils.cors_middleware import add_cors_headers
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -863,117 +864,107 @@ def get_alert_preferences(event, context):
             'body': json.dumps({'error': f"Error interno: {str(e)}"})
         }
 
+def get_tenant_id_from_headers(headers):
+    """Extrae el tenant_id de las cabeceras, insensible a mayúsculas/minúsculas."""
+    if not headers:
+        return None
+    for key in headers:
+        if key.lower() == 'x-tenant-id':
+            return headers[key]
+    return None
+
 def get_alerts_summary(event, context):
-    """
-    Obtiene un resumen de las alertas para un tenant específico
-    """
     try:
-        # Obtener tenant_id de los query params
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        user_id = query_params.get('user_id')
-        
+        logger.info(f"Recibido evento para resumen de alertas: {json.dumps(event)}")
+
+        # Obtener tenant_id de las cabeceras
+        headers = event.get('headers', {})
+        tenant_id = get_tenant_id_from_headers(headers)
+
+        # Obtener user_id de los parámetros de consulta (si aún es necesario)
+        params = event.get('queryStringParameters', {})
+        if params is None: 
+            params = {}
+        user_id = params.get('user_id') 
+
+        # Validar tenant_id
         if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
+            logger.warning("Falta la cabecera x-tenant-id en la solicitud de resumen")
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                'body': json.dumps({'error': 'Se requiere la cabecera x-tenant-id'})
             }
+        
+        # Validar user_id si es necesario para tu lógica
+        # if not user_id:
+        #     logger.warning("Falta user_id en los parámetros de consulta")
+        #     return {
+        #         'statusCode': 400,
+        #         'headers': {
+        #             'Content-Type': 'application/json',
+        #             'Access-Control-Allow-Origin': '*'
+        #         },
+        #         'body': json.dumps({'error': 'Se requiere user_id como parámetro de consulta'})
+        #     }
+
+        logger.info(f"Generando resumen de alertas para tenant: {tenant_id}, usuario: {user_id or 'No especificado'}")
+        
+        # Ejemplo: Contar alertas por severidad para el tenant_id dado
+        severities = ['critical', 'high', 'medium', 'low', 'info']
+        summary = {severity: 0 for severity in severities}
+        total_alerts = 0
+        
+        # Usar Scan con FilterExpression. Mejor usar Query si hay GSI por tenant.
+        scan_kwargs = {
+            'FilterExpression': boto3.dynamodb.conditions.Attr('tenant_id').eq(tenant_id),
+            'ProjectionExpression': 'alert_id, severity' # Solo traer los campos necesarios
+        }
+        
+        done = False
+        start_key = None
+        while not done:
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
             
-        if not user_id:
-            logger.error("Falta parámetro user_id")
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({'error': 'Se requiere user_id como parámetro'})
-            }
-        
-        logger.info(f"Obteniendo resumen de alertas para tenant: {tenant_id}")
-        
-        # Consultar alertas del tenant
-        response = alerts_table.scan(
-            FilterExpression="tenant_id = :t",
-            ExpressionAttributeValues={
-                ':t': tenant_id
-            }
-        )
-        
-        alerts = response.get('Items', [])
-        
-        # Contar alertas por severidad
-        severity_counts = {
-            'critical': 0,
-            'high': 0,
-            'medium': 0,
-            'low': 0,
-            'info': 0
-        }
-        
-        # Contar alertas por estado
-        status_counts = {
-            'new': 0,
-            'acknowledged': 0,
-            'resolved': 0,
-            'dismissed': 0
-        }
-        
-        # Alertas recientes
-        recent_alerts = []
-        
-        for alert in alerts:
-            # Contar por severidad
-            severity = alert.get('severity')
-            if severity in severity_counts:
-                severity_counts[severity] += 1
+            response = alerts_table.scan(**scan_kwargs)
+            items = response.get('Items', [])
+            
+            for item in items:
+                severity = item.get('severity', 'info').lower()
+                if severity in summary:
+                    summary[severity] += 1
+                total_alerts += 1
                 
-            # Contar por estado
-            status = alert.get('status')
-            if status in status_counts:
-                status_counts[status] += 1
-                
-            # Obtener alertas recientes (últimas 5)
-            if status in ['new', 'acknowledged']:
-                recent_alerts.append(alert)
-        
-        # Ordenar alertas recientes por fecha (más recientes primero)
-        recent_alerts.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-        recent_alerts = recent_alerts[:5]  # Limitar a 5 alertas
-        
-        # Construir resumen
-        summary = {
-            'tenant_id': tenant_id,
-            'total_alerts': len(alerts),
-            'unresolved_alerts': status_counts['new'] + status_counts['acknowledged'],
-            'by_severity': severity_counts,
-            'by_status': status_counts,
-            'recent_alerts': recent_alerts
-        }
-        
+            start_key = response.get('LastEvaluatedKey', None)
+            done = start_key is None
+            
+        logger.info(f"Resumen calculado: {summary}, Total: {total_alerts}")
+
         return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps(summary)
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({
+                'summary': summary,
+                'total_alerts': total_alerts,
+                'tenant_id': tenant_id,
+                'user_id': user_id
+            })
         }
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo resumen de alertas: {str(e)}")
+
+    except ClientError as e:
+        logger.error(f"Error de DynamoDB en resumen: {e.response['Error']['Message']}")
         return {
             'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({'error': str(e)})
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno del servidor al consultar resumen de alertas'})
+        }
+    except Exception as e:
+        logger.error(f"Error inesperado en resumen: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno del servidor'})
         }
 
 # Funciones de utilidad

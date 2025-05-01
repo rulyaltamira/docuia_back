@@ -513,10 +513,6 @@ functions:
           method: post
           cors: true
       - http:
-          path: alerts
-          method: get
-          cors: true
-      - http:
           path: alerts/{alert_id}
           method: get
           cors: true
@@ -575,6 +571,22 @@ functions:
           - ses:SendRawEmail
           - ses:GetIdentityVerificationAttributes
         Resource: "*"
+
+  # Nueva función para leer alertas
+  alertReader:
+    handler: src/handlers/alerts/alert_reader.lambda_handler
+    description: Lee y lista alertas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_reader.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts
+          method: get
+          cors: true
 
   scheduledAlertChecker:
     handler: src/handlers/alerts/scheduled_alert_checker.lambda_handler
