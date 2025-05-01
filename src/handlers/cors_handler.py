@@ -25,17 +25,11 @@ def lambda_handler(event, context):
     """
     logger.info("Procesando solicitud OPTIONS para CORS preflight")
     
-    # Extraer los encabezados solicitados para responder adecuadamente
-    request_headers = event.get('headers', {})
-    
     # Crear la respuesta con los encabezados CORS completos
     response = {
         'statusCode': 200,
         'headers': add_cors_headers(),
         'body': ''
     }
-    
-    # Log de los headers de respuesta para debugging
-    logger.debug(f"Headers de respuesta: {json.dumps(response['headers'])}")
     
     return response

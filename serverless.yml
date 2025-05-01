@@ -9,26 +9,12 @@ provider:
   region: eu-west-1
   stage: ${opt:stage, 'dev'}
   
-  # Configuración de HTTP API para CORS global
-  httpApi:
-    cors:
-      allowedOrigins: 
-        - '*'
-      allowedHeaders:
-        - Content-Type
-        - X-Amz-Date
-        - Authorization
-        - X-Api-Key
-        - X-Amz-Security-Token
-        - X-Requested-With
-        - x-tenant-id
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - DELETE
-        - OPTIONS
-      allowCredentials: true
+  # Configuración de API Gateway REST para CORS global
+  apiGateway:
+    cors: true
+    shouldStartNameWithService: true
+    binaryMediaTypes:
+      - '*/*'
   
   # Definir variables de entorno globales para todas las funciones
   environment:
@@ -162,7 +148,18 @@ functions:
       - http:
           path: '{proxy+}'
           method: options
-          cors: true
+          cors:
+            origins: ['*']
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
 
   emailHandler:
     handler: src/handlers/email_handler.lambda_handler

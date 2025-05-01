@@ -9,8 +9,9 @@ import uuid
 from datetime import datetime
 
 # Importar utilidades
-from src.utils.auth_middleware import validate_permission, require_permission, get_user_permissions
+from src.utils.auth_middleware import validate_permission, require_permission, get_user_permissions, get_user_roles
 from src.utils.response_helper import success_response, error_response, created_response
+from src.utils.cors_middleware import cors_wrapper, add_cors_headers
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -951,6 +952,7 @@ def remove_permission_from_role(event, context):
 
 # ---- Permisos del Usuario Actual ----
 
+@cors_wrapper
 def get_my_permissions(event, context):
     """Obtiene todos los permisos del usuario actual"""
     try:
@@ -961,21 +963,29 @@ def get_my_permissions(event, context):
         
         if not user_id:
             logger.error("Falta parámetro user_id")
-            return error_response(400, 'El parámetro user_id es obligatorio')
+            return {
+                'statusCode': 400,
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                'body': json.dumps({'error': 'El parámetro user_id es obligatorio'})
+            }
         
         if not tenant_id:
             logger.error("Falta parámetro tenant_id")
-            return error_response(400, 'El parámetro tenant_id es obligatorio')
+            return {
+                'statusCode': 400,
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                'body': json.dumps({'error': 'El parámetro tenant_id es obligatorio'})
+            }
         
         # Obtener todos los permisos del usuario
         permissions = get_user_permissions(user_id, tenant_id)
         
         # Obtener roles del usuario
-        user_roles = get_user_roles(user_id, tenant_id)
+        user_roles_data = get_user_roles(user_id, tenant_id)
         
         # Obtener detalles de los roles
         roles = []
-        for user_role in user_roles:
+        for user_role in user_roles_data:
             role_id = user_role.get('role_id')
             role_response = roles_table.get_item(Key={'role_id': role_id})
             
@@ -992,14 +1002,22 @@ def get_my_permissions(event, context):
         
         logger.info(f"Recuperados {len(permissions)} permisos para usuario {user_id}")
         
-        return success_response({
-            'user_id': user_id,
-            'tenant_id': tenant_id,
-            'permissions': permissions,
-            'roles': roles,
-            'is_admin': has_admin_permission
-        })
+        return {
+            'statusCode': 200,
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({
+                'user_id': user_id,
+                'tenant_id': tenant_id,
+                'permissions': permissions,
+                'roles': roles,
+                'is_admin': has_admin_permission
+            })
+        }
         
     except Exception as e:
         logger.error(f"Error obteniendo permisos de usuario: {str(e)}")
-        return error_response(500, f"Error interno: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': str(e)})
+        }

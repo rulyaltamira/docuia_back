@@ -54,18 +54,27 @@ def cors_wrapper(func):
                 'body': ''
             }
         
-        # Ejecutar la función original
-        response = func(event, context)
-        
-        # Verificar que la respuesta tenga la estructura esperada
-        if isinstance(response, dict) and 'headers' in response:
-            # Añadir encabezados CORS a la respuesta existente
-            response['headers'] = add_cors_headers(response['headers'])
-        elif isinstance(response, dict) and 'statusCode' in response:
-            # La respuesta no tiene headers, añadirlos
-            response['headers'] = add_cors_headers()
-        
-        return response
+        try:
+            # Ejecutar la función original
+            response = func(event, context)
+            
+            # Verificar que la respuesta tenga la estructura esperada
+            if isinstance(response, dict) and 'headers' in response:
+                # Añadir encabezados CORS a la respuesta existente
+                response['headers'] = add_cors_headers(response['headers'])
+            elif isinstance(response, dict) and 'statusCode' in response:
+                # La respuesta no tiene headers, añadirlos
+                response['headers'] = add_cors_headers()
+            
+            return response
+        except Exception as e:
+            # Si ocurre un error, devolver una respuesta formateada con CORS
+            logger.error(f"Error en función envuelta en CORS: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': add_cors_headers(),
+                'body': json.dumps({'error': str(e)})
+            }
     
     return wrapper
 

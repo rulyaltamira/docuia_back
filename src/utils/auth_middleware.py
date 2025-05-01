@@ -18,6 +18,9 @@ user_roles_table = dynamodb.Table(os.environ.get('USER_ROLES_TABLE'))
 role_permissions_table = dynamodb.Table(os.environ.get('ROLE_PERMISSIONS_TABLE'))
 users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
 
+# Importar el middleware CORS para usarlo en las respuestas
+from src.utils.cors_middleware import add_cors_headers
+
 def validate_permission(user_id, permission, resource=None, tenant_id=None):
     """
     Verifica si un usuario tiene un permiso específico sobre un recurso
@@ -351,18 +354,23 @@ def require_permission(permission, resource_param=None):
                         tenant_id = tenant_id or body.get('tenant_id')
                         user_id = user_id or body.get('user_id')
                 
+                # También buscar en los headers
+                headers = event.get('headers', {}) or {}
+                tenant_id = tenant_id or headers.get('x-tenant-id')
+                user_id = user_id or headers.get('x-user-id')
+                
                 # Verificar que tengamos los valores necesarios
                 if not user_id:
                     return {
                         'statusCode': 401,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'headers': add_cors_headers({'Content-Type': 'application/json'}),
                         'body': json.dumps({'error': 'Se requiere user_id para autorización'})
                     }
                 
                 if not tenant_id:
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'headers': add_cors_headers({'Content-Type': 'application/json'}),
                         'body': json.dumps({'error': 'Se requiere tenant_id para autorización'})
                     }
                 
@@ -387,7 +395,7 @@ def require_permission(permission, resource_param=None):
                     logger.warning(f"Acceso denegado: Usuario {user_id} no tiene permiso '{permission}' para recurso {resource}")
                     return {
                         'statusCode': 403,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'headers': add_cors_headers({'Content-Type': 'application/json'}),
                         'body': json.dumps({'error': 'No tiene permiso para realizar esta acción'})
                     }
                 
@@ -398,7 +406,7 @@ def require_permission(permission, resource_param=None):
                 logger.error(f"Error en middleware de autorización: {str(e)}")
                 return {
                     'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
                     'body': json.dumps({'error': f"Error de autorización: {str(e)}"})
                 }
         
