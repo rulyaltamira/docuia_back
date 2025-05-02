@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 import math
+# Importar helpers de CORS y respuesta
+from src.utils.cors_middleware import add_cors_headers
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -42,12 +44,11 @@ def lambda_handler(event, context):
     """
     Maneja diversas solicitudes de estadísticas a través de API Gateway
     """
-    # Determinar operación basada en la ruta y método HTTP
     http_method = event.get('httpMethod', '')
     path = event.get('path', '')
-    
     logger.info(f"Solicitud recibida: método {http_method}, ruta {path}")
     
+    # Enrutamiento
     if http_method == 'GET' and path == '/stats/critical-documents':
         return get_critical_documents(event, context)
     elif http_method == 'GET' and path == '/stats/documents':
@@ -64,18 +65,17 @@ def lambda_handler(event, context):
         return get_trends_stats(event, context)
     elif http_method == 'GET' and path == '/stats/key-dates':
         return get_key_dates(event, context)
+    elif http_method == 'GET' and path == '/stats/risks':
+        logger.info("Enrutando a get_risk_stats") # Log de depuración
+        return get_risk_stats(event, context) # Llamar a nueva función
     else:
-        logger.warning(f"Operación no válida: {http_method} {path}")
+        logger.warning(f"Operación no válida o ruta no encontrada: {http_method} {path}")
+        # Usar add_cors_headers y retornar 404 (Not Found) es más apropiado
         return {
-            'statusCode': 400,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
-            'body': json.dumps({'error': 'Operación no válida'})
+            'statusCode': 404, 
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Ruta no encontrada'})
         }
-
 
 def get_document_stats(event, context):
     """
@@ -89,7 +89,7 @@ def get_document_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -174,7 +174,7 @@ def get_document_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
@@ -182,7 +182,7 @@ def get_document_stats(event, context):
         logger.error(f"Error obteniendo estadísticas de documentos: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -198,7 +198,7 @@ def get_user_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -247,7 +247,7 @@ def get_user_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
@@ -255,7 +255,7 @@ def get_user_stats(event, context):
         logger.error(f"Error obteniendo estadísticas de usuarios: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -271,7 +271,7 @@ def get_processing_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -350,7 +350,7 @@ def get_processing_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
@@ -358,7 +358,7 @@ def get_processing_stats(event, context):
         logger.error(f"Error obteniendo estadísticas de procesamiento: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -374,7 +374,7 @@ def get_storage_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -384,7 +384,7 @@ def get_storage_stats(event, context):
         if 'Item' not in tenant_response:
             return {
                 'statusCode': 404,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Tenant no encontrado'})
             }
         
@@ -458,7 +458,7 @@ def get_storage_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
@@ -466,7 +466,7 @@ def get_storage_stats(event, context):
         logger.error(f"Error obteniendo estadísticas de almacenamiento: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -483,7 +483,7 @@ def get_critical_documents(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -516,7 +516,7 @@ def get_critical_documents(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({
                 'critical_documents': critical_docs,
                 'count': len(critical_docs),
@@ -528,7 +528,7 @@ def get_critical_documents(event, context):
         logger.error(f"Error obteniendo documentos críticos: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
     
@@ -544,7 +544,7 @@ def get_summary_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -554,7 +554,7 @@ def get_summary_stats(event, context):
         if 'Item' not in tenant_response:
             return {
                 'statusCode': 404,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Tenant no encontrado'})
             }
         
@@ -615,7 +615,7 @@ def get_summary_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(summary, cls=DecimalEncoder)
         }
         
@@ -623,7 +623,7 @@ def get_summary_stats(event, context):
         logger.error(f"Error obteniendo resumen de estadísticas: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -641,7 +641,7 @@ def get_trends_stats(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -650,7 +650,7 @@ def get_trends_stats(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(stats, cls=DecimalEncoder)
         }
         
@@ -658,7 +658,7 @@ def get_trends_stats(event, context):
         logger.error(f"Error obteniendo estadísticas de tendencias: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps({'error': str(e)})
         }
 
@@ -676,11 +676,7 @@ def get_key_dates(event, context):
         if not tenant_id:
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Credentials': True
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json', 'Access-Control-Allow-Credentials': True}),
                 'body': json.dumps({'error': 'Se requiere tenant_id'})
             }
         
@@ -737,21 +733,13 @@ def get_key_dates(event, context):
             logger.error(f"Error consultando fechas clave: {str(e)}")
             return {
                 'statusCode': 500,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Credentials': True
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json', 'Access-Control-Allow-Credentials': True}),
                 'body': json.dumps({'error': f"Error consultando fechas clave: {str(e)}"})
             }
         
         return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
+            'headers': add_cors_headers({'Content-Type': 'application/json', 'Access-Control-Allow-Credentials': True}),
             'body': json.dumps({
                 'key_dates': key_dates,
                 'count': len(key_dates)
@@ -762,12 +750,43 @@ def get_key_dates(event, context):
         logger.error(f"Error obteniendo fechas clave: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': True
-            },
+            'headers': add_cors_headers({'Content-Type': 'application/json', 'Access-Control-Allow-Credentials': True}),
             'body': json.dumps({'error': str(e)})
+        }
+
+def get_risk_stats(event, context):
+    """
+    Obtiene estadísticas de riesgos (Implementación Placeholder)
+    """
+    try:
+        logger.info("Dentro de get_risk_stats") # Log de depuración
+        # Aquí iría la lógica para obtener estadísticas de riesgos
+        # Ejemplo: obtener tenant_id de query params o cabeceras (si es necesario)
+        params = event.get('queryStringParameters', {}) or {}
+        tenant_id = params.get('tenant_id') # O leer de cabeceras como en alert_reader
+        
+        # Simular datos de riesgo
+        risk_stats = {
+            'tenant_id': tenant_id,
+            'risk_score': 75,
+            'critical_risks': [{'id': 'risk1', 'description': 'Contrato X a punto de vencer'}],
+            'medium_risks': [{'id': 'risk2', 'description': 'Falta documentación Y'}]
+        }
+        
+        # Usar add_cors_headers
+        return {
+            'statusCode': 200,
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps(risk_stats, cls=DecimalEncoder)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo estadísticas de riesgos: {str(e)}")
+        # Usar add_cors_headers
+        return {
+            'statusCode': 500,
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno calculando estadísticas de riesgos'})
         }
 
 # Funciones auxiliares

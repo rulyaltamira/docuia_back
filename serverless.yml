@@ -11,7 +11,6 @@ provider:
   
   # Configuración de API Gateway REST para CORS global
   apiGateway:
-    cors: true
     shouldStartNameWithService: true
     binaryMediaTypes:
       - '*/*'
@@ -299,6 +298,7 @@ functions:
       USER_POOL_ID: !Ref CognitoUserPool
     # Añadir estos permisos específicos para la función userManagement
     iamRoleStatements:
+      # Permisos para Cognito
       - Effect: Allow
         Action:
           - cognito-idp:AdminCreateUser
@@ -307,6 +307,16 @@ functions:
           - cognito-idp:AdminDisableUser
           - cognito-idp:ListUsers
         Resource: !GetAtt CognitoUserPool.Arn
+      # --- Añadir permisos para DynamoDB (UsersTable) --- 
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:Query
+          - dynamodb:Scan # Permiso que faltaba explícitamente
+        Resource: !GetAtt UsersTable.Arn # Permiso específico para UsersTable
     events:
       - http:
           path: users
@@ -736,6 +746,10 @@ functions:
           cors: true
       - http:
           path: stats/key-dates
+          method: get
+          cors: true
+      - http:
+          path: stats/risks
           method: get
           cors: true
 
