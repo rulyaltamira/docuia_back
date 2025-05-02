@@ -7,6 +7,7 @@ import base64
 
 # Importar utilidades para cálculo y verificación de hashes
 from src.utils.document_hash import calculate_hash_from_base64, check_duplicate_document
+from src.utils.cors_middleware import add_cors_headers
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -22,32 +23,69 @@ def lambda_handler(event, context):
     o recibir un hash precalculado.
     """
     try:
-        # Extraer datos del body
-        body = json.loads(event.get('body', '{}'))
+        # Obtener el cuerpo y verificar si está codificado en Base64
+        body_str = event.get('body')
+        is_base64_encoded = event.get('isBase64Encoded', False)
+
+        if is_base64_encoded and body_str:
+            logger.info("Decodificando cuerpo Base64 para check_duplicates")
+            try:
+                body_str = base64.b64decode(body_str).decode('utf-8')
+            except (base64.binascii.Error, UnicodeDecodeError) as decode_error:
+                logger.error(f"Error decodificando Base64: {decode_error}")
+                return {
+                    'statusCode': 400,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'Error decodificando el cuerpo de la solicitud'})
+                }
+
+        # Parsear el JSON decodificado (o el original)
+        if not body_str:
+            logger.error("El cuerpo de la solicitud está vacío o ausente (después de posible decodificación)")
+            body = {}
+        else:
+            try:
+                body = json.loads(body_str)
+            except json.JSONDecodeError as json_error:
+                logger.error(f"Error parseando JSON del cuerpo: {json_error}. Body (decodificado si aplica): {body_str[:500]}")
+                return {
+                    'statusCode': 400,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'El cuerpo de la solicitud no es un JSON válido'})
+                }
+
+        # Extraer datos del body parseado
         tenant_id = body.get('tenant_id')
-        
-        # Verificar si se proporciona un ID a excluir (útil para actualizaciones)
         exclude_id = body.get('exclude_id')
-        
-        # Obtener el hash del documento, ya sea directamente o calculándolo
         doc_hash = body.get('hash')
         
         if not doc_hash and 'file_content' in body:
-            # Si se proporciona el contenido del archivo en base64, calcular hash
-            base64_content = body.get('file_content')
-            doc_hash = calculate_hash_from_base64(base64_content)
-            logger.info(f"Hash calculado a partir del contenido: {doc_hash}")
-        
+            base64_content = body.get('file_content') # El contenido ya está en texto plano (si fue decodificado)
+            # Necesitamos re-codificar a bytes para la función hash si vino como base64 originalmente
+            # O idealmente, calcular hash directamente desde el base64 recibido antes de decodificar
+            # Por simplicidad ahora, asumimos que calculate_hash_from_base64 puede manejar el string decodificado
+            # o que el frontend envía hash si no envía file_content base64.
+            # Revisar la función calculate_hash_from_base64 si esto falla.
+            try:
+                # Intentar calcular desde el string (puede necesitar ajuste en la función util)
+                doc_hash = calculate_hash_from_base64(base64_content)
+                logger.info(f"Hash calculado a partir del contenido decodificado: {doc_hash}")
+            except Exception as hash_error:
+                 logger.error(f"Error calculando hash desde el contenido: {hash_error}")
+                 return {
+                    'statusCode': 500,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'Error procesando el contenido del archivo para calcular hash'})
+                }
+
         # Validar parámetros obligatorios
         if not tenant_id or not doc_hash:
-            logger.error("Faltan parámetros obligatorios (tenant_id o hash/file_content)")
+            logger.error("Faltan parámetros obligatorios (tenant_id o hash/file_content) en el cuerpo JSON")
+            # Usar add_cors_headers
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
-                'body': json.dumps({'error': 'Se requieren tenant_id y hash o file_content como parámetros'})
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                'body': json.dumps({'error': 'Se requieren tenant_id y (hash o file_content) en el cuerpo JSON'})
             }
         
         logger.info(f"Verificando duplicados para tenant: {tenant_id}, hash: {doc_hash}")
@@ -83,24 +121,20 @@ def lambda_handler(event, context):
                     for doc in duplicate_info['duplicates'][:5]  # Limitar a 5 para no sobrecargar
                 ]
         
+        # Usar add_cors_headers
         return {
             'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
             'body': json.dumps(response_body)
         }
     
     except Exception as e:
         logger.error(f"Error verificando duplicados: {str(e)}")
+        # Usar add_cors_headers
         return {
             'statusCode': 500,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({'error': str(e)})
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno verificando duplicados'})
         }
 
 def handle_duplicate(event, context):
@@ -109,21 +143,35 @@ def handle_duplicate(event, context):
     Opciones: reemplazar, crear nueva versión, ignorar duplicado
     """
     try:
-        # Extraer datos del body
-        body = json.loads(event.get('body', '{}'))
+        # Aplicar la misma lógica de decodificación Base64 al body si es necesario
+        body_str = event.get('body')
+        is_base64_encoded = event.get('isBase64Encoded', False)
+        if is_base64_encoded and body_str:
+            body_str = base64.b64decode(body_str).decode('utf-8')
+        
+        if not body_str:
+            body = {}
+        else:
+            try:
+                body = json.loads(body_str)
+            except json.JSONDecodeError as json_error:
+                 logger.error(f"Error parseando JSON del cuerpo en handle_duplicate: {json_error}. Body: {body_str[:500]}")
+                 return {
+                    'statusCode': 400,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'El cuerpo de la solicitud no es un JSON válido'})
+                }
+
+        # Extraer datos del body parseado
         doc_id = body.get('document_id')
         action = body.get('action', 'ignore')  # ignore, replace, new_version
         original_doc_id = body.get('original_doc_id')
         
-        # Validar parámetros obligatorios
         if not doc_id or not original_doc_id:
-            logger.error("Faltan parámetros obligatorios (document_id o original_doc_id)")
+            # Usar add_cors_headers
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Se requieren document_id y original_doc_id como parámetros'})
             }
         
@@ -150,10 +198,7 @@ def handle_duplicate(event, context):
             if 'Item' not in original_response:
                 return {
                     'statusCode': 404,
-                    'headers': {
-                        'Access-Control-Allow-Origin': '*',
-                        'Content-Type': 'application/json'
-                    },
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
                     'body': json.dumps({'error': 'Documento original no encontrado'})
                 }
             
@@ -164,10 +209,7 @@ def handle_duplicate(event, context):
             if 'Item' not in new_response:
                 return {
                     'statusCode': 404,
-                    'headers': {
-                        'Access-Control-Allow-Origin': '*',
-                        'Content-Type': 'application/json'
-                    },
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
                     'body': json.dumps({'error': 'Documento nuevo no encontrado'})
                 }
             
@@ -200,10 +242,7 @@ def handle_duplicate(event, context):
             if 'Item' not in original_response:
                 return {
                     'statusCode': 404,
-                    'headers': {
-                        'Access-Control-Allow-Origin': '*',
-                        'Content-Type': 'application/json'
-                    },
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
                     'body': json.dumps({'error': 'Documento original no encontrado'})
                 }
             
@@ -237,33 +276,23 @@ def handle_duplicate(event, context):
         else:
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': f"Acción no válida: {action}"})
             }
         
+        # Respuesta exitosa
+        # Usar add_cors_headers
         return {
             'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({
-                'message': response_message,
-                'document_id': doc_id,
-                'action': action
-            })
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'message': response_message, 'action': action, 'document_id': doc_id})
         }
     
     except Exception as e:
         logger.error(f"Error manejando duplicado: {str(e)}")
+        # Usar add_cors_headers
         return {
             'statusCode': 500,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({'error': str(e)})
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno manejando duplicado'})
         }

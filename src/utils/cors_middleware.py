@@ -23,11 +23,12 @@ def add_cors_headers(headers=None):
     if headers is None:
         headers = {}
     
-    # Añadir encabezados CORS estándar con x-tenant-id y x-user-id incluidos
+    # Añadir encabezados CORS estándar incluyendo TODOS los requeridos
     cors_headers = {
         'Access-Control-Allow-Origin': '*',  # Permite cualquier origen - ajustar en producción
         'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,x-tenant-id,x-user-id',
+        # Lista completa de cabeceras identificada por el usuario
+        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id,x-tenant-id,x-user-id',
         'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,PUT,PATCH,DELETE'
     }
     

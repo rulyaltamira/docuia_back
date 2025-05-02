@@ -5,9 +5,11 @@ import boto3
 from datetime import datetime
 import logging
 import hashlib
+import base64
 
 # Importar utilidades para manejo de rutas S3
 from src.utils.s3_path_helper import decode_s3_key
+from src.utils.cors_middleware import add_cors_headers
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -21,20 +23,46 @@ MAIN_BUCKET = os.environ.get('MAIN_BUCKET')
 def lambda_handler(event, context):
     """Confirma que un archivo ha sido subido exitosamente a S3"""
     try:
-        # Extraer datos del cuerpo
-        body = json.loads(event.get('body', '{}'))
+        # Obtener el cuerpo y verificar si está codificado en Base64
+        body_str = event.get('body') 
+        is_base64_encoded = event.get('isBase64Encoded', False)
+
+        if is_base64_encoded and body_str:
+            logger.info("Decodificando cuerpo Base64")
+            try:
+                body_str = base64.b64decode(body_str).decode('utf-8')
+            except (base64.binascii.Error, UnicodeDecodeError) as decode_error:
+                logger.error(f"Error decodificando Base64: {decode_error}")
+                return {
+                    'statusCode': 400,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'Error decodificando el cuerpo de la solicitud'})
+                }
+        
+        # Ahora, body_str debería contener el JSON como texto plano (o None/vacío si no había body)
+        if not body_str:
+             logger.error("El cuerpo de la solicitud está vacío o ausente (después de posible decodificación)")
+             body = {} 
+        else:
+            try:
+                body = json.loads(body_str) # Parsear el JSON decodificado (o el original)
+            except json.JSONDecodeError as json_error:
+                 logger.error(f"Error parseando JSON del cuerpo: {json_error}. Body (decodificado si aplica): {body_str[:500]}")
+                 return {
+                    'statusCode': 400,
+                    'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                    'body': json.dumps({'error': 'El cuerpo de la solicitud no es un JSON válido'})
+                }
+
         file_id = body.get('file_id')
         
         # Validar parámetros obligatorios
         if not file_id:
-            logger.error("Parámetro 'file_id' no proporcionado")
+            logger.error("Parámetro 'file_id' no proporcionado en el cuerpo JSON")
             return {
                 'statusCode': 400,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
-                'body': json.dumps({'error': 'El parámetro file_id es obligatorio'})
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
+                'body': json.dumps({'error': 'El parámetro file_id es obligatorio en el cuerpo JSON'})
             }
         
         logger.info(f"Confirmando subida para documento: {file_id}")
@@ -46,10 +74,7 @@ def lambda_handler(event, context):
             logger.error(f"Documento no encontrado: {file_id}")
             return {
                 'statusCode': 404,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Documento no encontrado'})
             }
         
@@ -120,10 +145,7 @@ def lambda_handler(event, context):
             
             return {
                 'statusCode': 200,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps(response_body)
             }
             
@@ -131,10 +153,7 @@ def lambda_handler(event, context):
             logger.error(f"Archivo no encontrado en S3: {item['s3_key']}")
             return {
                 'statusCode': 404,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
+                'headers': add_cors_headers({'Content-Type': 'application/json'}),
                 'body': json.dumps({'error': 'Archivo no encontrado en S3'})
             }
     
@@ -142,11 +161,8 @@ def lambda_handler(event, context):
         logger.error(f"Error confirmando subida: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({'error': str(e)})
+            'headers': add_cors_headers({'Content-Type': 'application/json'}),
+            'body': json.dumps({'error': 'Error interno confirmando la subida'})
         }
 
 def check_duplicate(tenant_id, doc_hash):

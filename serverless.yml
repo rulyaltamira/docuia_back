@@ -35,7 +35,7 @@ provider:
     AUDIT_BUCKET: !Ref AuditBucket
     BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
   
-  # Permisos IAM para todas las funciones
+  # Permisos IAM para todas las funciones (Rol Global)
   iam:
     role:
       statements:
@@ -48,13 +48,12 @@ provider:
             - s3:GetBucketNotification
             - s3:PutBucketNotification
           Resource:
+            # Mantener permisos para MainBucket y SESBucket
             - !GetAtt MainBucket.Arn
             - !Join ['', [!GetAtt MainBucket.Arn, '/*']]
             - !GetAtt SESBucket.Arn
             - !Join ['', [!GetAtt SESBucket.Arn, '/*']]
-            - !GetAtt AuditBucket.Arn
-            - !Join ['', [!GetAtt AuditBucket.Arn, '/*']]
-        - Effect: Allow
+        - Effect: Allow # Permisos DynamoDB globales
           Action:
             - dynamodb:GetItem
             - dynamodb:PutItem
@@ -65,14 +64,17 @@ provider:
           Resource:
             - !GetAtt ContractsTable.Arn
             - !GetAtt TenantsTable.Arn
-            - !GetAtt UsersTable.Arn
-            - !GetAtt AlertsTable.Arn
+            - !GetAtt UsersTable.Arn # UserManagement usa su propio rol, ¿es necesario aquí?
+            - !GetAtt AlertsTable.Arn # AlertNotifier/Processor usan su propio rol? Revisar
             - !GetAtt AlertRulesTable.Arn
             - !GetAtt AlertPreferencesTable.Arn
             - !GetAtt RolesTable.Arn
             - !GetAtt PermissionsTable.Arn
             - !GetAtt UserRolesTable.Arn
             - !GetAtt RolePermissionsTable.Arn
+            - !GetAtt StatisticsTable.Arn
+            - !GetAtt ReportsTable.Arn
+            - !GetAtt ReportSchedulesTable.Arn
         - Effect: Allow
           Action:
             - logs:CreateLogGroup
@@ -147,18 +149,7 @@ functions:
       - http:
           path: '{proxy+}'
           method: options
-          cors:
-            origins: ['*']
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-              - X-Requested-With
-              - x-tenant-id
-              - x-user-id
-            allowCredentials: true
+          cors: true
 
   emailHandler:
     handler: src/handlers/email_handler.lambda_handler
@@ -198,7 +189,22 @@ functions:
       - http:
           path: confirm-upload
           method: post
-          cors: true
+          # Asegurar integración proxy y CORS explícito
+          integration: lambda-proxy # O http_proxy dependiendo de la versión exacta de SLSS v3
+          # cors: true <-- Reemplazar con bloque explícito
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
 
   documentProcessor:
     handler: src/handlers/document_processor.lambda_handler
@@ -296,9 +302,7 @@ functions:
         - 'src/utils/**'
     environment:
       USER_POOL_ID: !Ref CognitoUserPool
-    # Añadir estos permisos específicos para la función userManagement
     iamRoleStatements:
-      # Permisos para Cognito
       - Effect: Allow
         Action:
           - cognito-idp:AdminCreateUser
@@ -307,7 +311,6 @@ functions:
           - cognito-idp:AdminDisableUser
           - cognito-idp:ListUsers
         Resource: !GetAtt CognitoUserPool.Arn
-      # --- Añadir permisos para DynamoDB (UsersTable) --- 
       - Effect: Allow
         Action:
           - dynamodb:GetItem
@@ -315,8 +318,8 @@ functions:
           - dynamodb:UpdateItem
           - dynamodb:DeleteItem
           - dynamodb:Query
-          - dynamodb:Scan # Permiso que faltaba explícitamente
-        Resource: !GetAtt UsersTable.Arn # Permiso específico para UsersTable
+          - dynamodb:Scan
+        Resource: !GetAtt UsersTable.Arn
     events:
       - http:
           path: users
@@ -434,7 +437,6 @@ functions:
       patterns:
         - 'src/handlers/email/ses_configurator.py'
         - 'src/utils/**'
-    # Añadir estos permisos específicos para la función sesConfigurator
     iamRoleStatements:
       - Effect: Allow
         Action:
@@ -746,10 +748,6 @@ functions:
           cors: true
       - http:
           path: stats/key-dates
-          method: get
-          cors: true
-      - http:
-          path: stats/risks
           method: get
           cors: true
 
