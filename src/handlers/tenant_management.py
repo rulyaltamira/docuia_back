@@ -6,6 +6,7 @@ import boto3
 import secrets
 from datetime import datetime
 import logging
+from decimal import Decimal
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -70,6 +71,15 @@ TENANT_PLANS = {
     }
 }
 
+# Codificador personalizado para manejar tipos Decimal
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            # Puedes elegir convertir a float o str. Float es más común.
+            return float(obj) 
+        # Dejar que la clase base maneje otros tipos o lance error
+        return json.JSONEncoder.default(self, obj)
+
 def lambda_handler(event, context):
     """Maneja operaciones CRUD para tenants (clientes)"""
     # Determinar operación basada en la ruta y método HTTP
@@ -99,7 +109,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 400,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': 'Operación no válida'})
+            'body': json.dumps({'error': 'Operación no válida'}, cls=DecimalEncoder)
         }
 
 def create_tenant(event, context):
@@ -115,7 +125,7 @@ def create_tenant(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'El nombre del cliente es obligatorio'})
+                'body': json.dumps({'error': 'El nombre del cliente es obligatorio'}, cls=DecimalEncoder)
             }
         
         # Validar que el plan seleccionado existe
@@ -124,7 +134,7 @@ def create_tenant(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': f'Plan no válido. Opciones disponibles: {", ".join(TENANT_PLANS.keys())}'})
+                'body': json.dumps({'error': f'Plan no válido. Opciones disponibles: {", ".join(TENANT_PLANS.keys())}'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Creando nuevo tenant: {tenant_name}, plan: {plan}")
@@ -204,7 +214,7 @@ def create_tenant(event, context):
                 'api_key': api_key,
                 'webhook_secret': webhook_secret,
                 'email_domain': initial_settings.get('email_domain')
-            })
+            }, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -212,7 +222,7 @@ def create_tenant(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def update_tenant(event, context):
@@ -233,7 +243,7 @@ def update_tenant(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Cliente no encontrado'})
+                'body': json.dumps({'error': 'Cliente no encontrado'}, cls=DecimalEncoder)
             }
         
         tenant = response['Item']
@@ -279,7 +289,7 @@ def update_tenant(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'message': 'Cliente actualizado correctamente'})
+            'body': json.dumps({'message': 'Cliente actualizado correctamente', 'tenant_id': tenant_id}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -287,7 +297,7 @@ def update_tenant(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def delete_tenant(event, context):
@@ -305,7 +315,7 @@ def delete_tenant(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Cliente no encontrado'})
+                'body': json.dumps({'error': 'Cliente no encontrado'}, cls=DecimalEncoder)
             }
         
         # Marcar como inactivo en lugar de eliminar
@@ -326,9 +336,9 @@ def delete_tenant(event, context):
         # Esto permite recuperación y cumplimiento de políticas de retención
         
         return {
-            'statusCode': 200,
+            'statusCode': 204,  # Sin contenido en DELETE exitoso
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'message': 'Cliente desactivado correctamente'})
+            'body': ''  # Sin body
         }
         
     except Exception as e:
@@ -336,7 +346,7 @@ def delete_tenant(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def list_tenants(event, context):
@@ -376,7 +386,7 @@ def list_tenants(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'tenants': tenants})
+            'body': json.dumps({'tenants': tenants}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -384,7 +394,7 @@ def list_tenants(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_tenant(event, context):
@@ -402,7 +412,7 @@ def get_tenant(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Cliente no encontrado'})
+                'body': json.dumps({'error': 'Cliente no encontrado'}, cls=DecimalEncoder)
             }
         
         tenant = response['Item']
@@ -418,7 +428,7 @@ def get_tenant(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'tenant': tenant})
+            'body': json.dumps({'tenant': tenant}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -426,7 +436,7 @@ def get_tenant(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_tenant_plans(event, context):
@@ -438,7 +448,7 @@ def get_tenant_plans(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'plans': TENANT_PLANS})
+            'body': json.dumps({'plans': TENANT_PLANS}, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -446,7 +456,7 @@ def get_tenant_plans(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def update_tenant_plan(event, context):
@@ -464,7 +474,7 @@ def update_tenant_plan(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'El parámetro plan es obligatorio'})
+                'body': json.dumps({'error': 'El parámetro plan es obligatorio'}, cls=DecimalEncoder)
             }
         
         # Validar que el plan seleccionado existe
@@ -473,7 +483,7 @@ def update_tenant_plan(event, context):
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': f'Plan no válido. Opciones disponibles: {", ".join(TENANT_PLANS.keys())}'})
+                'body': json.dumps({'error': f'Plan no válido. Opciones disponibles: {", ".join(TENANT_PLANS.keys())}'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Actualizando plan de tenant {tenant_id} a: {new_plan}")
@@ -485,7 +495,7 @@ def update_tenant_plan(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Cliente no encontrado'})
+                'body': json.dumps({'error': 'Cliente no encontrado'}, cls=DecimalEncoder)
             }
         
         tenant = response['Item']
@@ -532,7 +542,7 @@ def update_tenant_plan(event, context):
                     'max_storage_mb': plan_limits['max_storage_mb']
                 },
                 'features': plan_limits['features']
-            })
+            }, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -540,7 +550,7 @@ def update_tenant_plan(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def get_tenant_usage(event, context):
@@ -558,7 +568,7 @@ def get_tenant_usage(event, context):
             return {
                 'statusCode': 404,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Cliente no encontrado'})
+                'body': json.dumps({'error': 'Cliente no encontrado'}, cls=DecimalEncoder)
             }
         
         tenant = response['Item']
@@ -601,7 +611,7 @@ def get_tenant_usage(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps(usage_info)
+            'body': json.dumps(usage_info, cls=DecimalEncoder)
         }
         
     except Exception as e:
@@ -609,7 +619,7 @@ def get_tenant_usage(event, context):
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)})
+            'body': json.dumps({'error': str(e)}, cls=DecimalEncoder)
         }
 
 def calculate_tenant_usage(tenant_id):

@@ -186,3 +186,41 @@ Este proyecto está licenciado bajo [tu licencia aquí]
 ## Contacto
 
 Para consultas sobre el proyecto, contactar a Ereace.es
+
+## Problemas conocidos y soluciones
+
+### Problema de API Gateway con el cuerpo de solicitudes
+
+Se identificó un problema con la forma en que API Gateway envía el cuerpo (body) de las solicitudes al Lambda. El error común era:
+
+```
+Error parseando body: Expecting value: line 1 column 1 (char 0)
+```
+
+Este error ocurre porque API Gateway ocasionalmente envía el cuerpo en un formato que no es directamente interpretable como JSON.
+
+#### Solución implementada
+
+1. **Creación de helper para API Gateway**: Se ha creado un módulo `src/utils/api_gateway_helper.py` que estandariza el procesamiento de eventos de API Gateway, incluyendo:
+   - Manejo de cuerpos codificados en Base64
+   - Detección inteligente del formato de entrada
+   - Gestión de errores de parseo
+
+2. **Scripts de prueba mejorados**: 
+   - `scripts/api_gateway_fix.py`: Permite crear tenants invocando directamente el Lambda, evitando los problemas de API Gateway.
+   - `scripts/direct_lambda_test.py`: Script para pruebas directas del Lambda.
+
+#### Para crear un tenant correctamente:
+
+Ejecutar desde el directorio `scripts`:
+
+```
+python api_gateway_fix.py --name "Nombre del Tenant" --email "admin@ejemplo.com" --plan "free"
+```
+
+Opciones disponibles para el plan: `free`, `basic`, `premium`, `enterprise`.
+
+#### Notas importantes:
+
+- La integración con el frontend debe asegurar que las solicitudes tengan el header `Content-Type: application/json`
+- Para APIs externas que consuman este backend, recomendamos configurar un middleware que maneje correctamente la codificación/decodificación de JSON.

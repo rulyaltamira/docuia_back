@@ -1,0 +1,15 @@
+Creating tenant Ereace with admin ruly.altamirano@gmail.com...
+Datos a enviar: {
+  "name": "Ereace",
+  "plan": "free",
+  "admin_email": "ruly.altamirano@gmail.com",
+  "industry": "Technology",
+  "company_size": "1-10",
+  "country": "Spain"
+}
+URL: https://j6i9gzg4se.execute-api.eu-west-1.amazonaws.com/dev/tenants/onboard
+Status Code: 400
+Response Text: {"error": "Cuerpo de solicitud inv\u00e1lido: Expecting value: line 1 column 1 (char 0)"}
+Request Headers: {'User-Agent': 'python-requests/2.32.3', 'Accept-Encoding': 'gzip, deflate', 'Accept': 'application/json', 'Connection': 'keep-alive', 'Content-Type': 'application/json', 'Content-Length': '148'}
+Request Body: b'{"name": "Ereace", "plan": "free", "admin_email": "ruly.altamirano@gmail.com", "industry": "Technology", "company_size": "1-10", "country": "Spain"}'
+Error procesando respuesta: 400 Client Error: Bad Request for url: https://j6i9gzg4se.execute-api.eu-west-1.amazonaws.com/dev/tenants/onboard

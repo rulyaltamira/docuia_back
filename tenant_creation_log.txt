@@ -1,0 +1,12 @@
+Creating tenant Ereace with admin ruly.altamirano@gmail.com...
+Datos a enviar: {
+  "name": "Ereace",
+  "plan": "free",
+  "admin_email": "ruly.altamirano@gmail.com",
+  "industry": "Technology",
+  "company_size": "1-10",
+  "country": "Spain"
+}
+URL: https://j6i9gzg4se.execute-api.eu-west-1.amazonaws.com/dev/tenants/onboard
+Status Code: 400
+Response Text: {"error": "Cuerpo de solicitud inv\u00e1lido: Expecting value: line 1 column 1 (char 0)"}

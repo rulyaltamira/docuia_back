@@ -1,5 +1,5 @@
 # docpilot-backend/serverless.yml
-service: docpilot-newsystem
+service: docpilot-newsystem-v2
 
 frameworkVersion: '3'
 
@@ -8,13 +8,14 @@ provider:
   runtime: python3.9
   region: eu-west-1
   stage: ${opt:stage, 'dev'}
+  logRetentionInDays: 14
   
   # Configuración de API Gateway REST para CORS global
   apiGateway:
     shouldStartNameWithService: true
     binaryMediaTypes:
       - '*/*'
-  
+
   # Definir variables de entorno globales para todas las funciones
   environment:
     CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
@@ -29,10 +30,10 @@ provider:
     USER_ROLES_TABLE: ${self:service}-user-roles-${self:provider.stage}
     ROLE_PERMISSIONS_TABLE: ${self:service}-role-permissions-${self:provider.stage}
     STATISTICS_TABLE: ${self:service}-statistics-${self:provider.stage}
-    # Referencias a los nombres de bucket que se generarán automáticamente
-    MAIN_BUCKET: !Ref MainBucket
-    SES_BUCKET: !Ref SESBucket
-    AUDIT_BUCKET: !Ref AuditBucket
+    # Referencias a los nombres de bucket definidos explícitamente
+    MAIN_BUCKET: ${self:service}-main-${self:provider.stage}
+    SES_BUCKET: ${self:service}-ses-${self:provider.stage}
+    AUDIT_BUCKET: ${self:service}-audit-${self:provider.stage}
     BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
   
   # Permisos IAM para todas las funciones (Rol Global)
@@ -149,7 +150,19 @@ functions:
       - http:
           path: '{proxy+}'
           method: options
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
 
   emailHandler:
     handler: src/handlers/email_handler.lambda_handler
@@ -174,7 +187,19 @@ functions:
       - http:
           path: generate-url
           method: get
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
 
   confirmUpload:
     handler: src/handlers/confirm_upload.lambda_handler
@@ -191,7 +216,6 @@ functions:
           method: post
           # Asegurar integración proxy y CORS explícito
           integration: lambda-proxy # O http_proxy dependiendo de la versión exacta de SLSS v3
-          # cors: true <-- Reemplazar con bloque explícito
           cors:
             origin: '*'
             headers:
@@ -215,6 +239,13 @@ functions:
       patterns:
         - 'src/handlers/document_processor.py'
         - 'src/utils/**'
+    events:
+      - s3:
+          bucket: !Ref MainBucket
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: tenants/
+          existing: true
 
   tenantManagement:
     handler: src/handlers/tenant_management.lambda_handler
@@ -277,6 +308,35 @@ functions:
           - cognito-idp:AdminGetUser
           - cognito-idp:AdminUpdateUserAttributes
         Resource: !GetAtt CognitoUserPool.Arn
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:Query
+          - dynamodb:Scan
+        Resource: 
+          - !GetAtt TenantsTable.Arn
+          - !GetAtt UsersTable.Arn
+          - !GetAtt ContractsTable.Arn
+          - !GetAtt AlertsTable.Arn
+          - !GetAtt AlertRulesTable.Arn
+          - !GetAtt AlertPreferencesTable.Arn
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+          - s3:PutObject
+          - s3:ListBucket
+          - s3:DeleteObject
+          - s3:PutObjectAcl
+        Resource: 
+          - arn:aws:s3:::${self:provider.environment.MAIN_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.SES_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.AUDIT_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.MAIN_BUCKET}
+          - arn:aws:s3:::${self:provider.environment.SES_BUCKET}
+          - arn:aws:s3:::${self:provider.environment.AUDIT_BUCKET}
     events:
       - http:
           path: tenants/onboard
@@ -391,10 +451,28 @@ functions:
           path: audit/log
           method: post
           cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
       - http:
           path: audit/export
           method: post
           cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
+      - http:
+          path: audit/logs
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
 
   # Nuevas funciones para gestión de duplicados
   checkDuplicates:
@@ -1026,21 +1104,25 @@ resources:
       Type: AWS::S3::Bucket
       DeletionPolicy: Retain
       Properties:
+        BucketName: ${self:provider.environment.MAIN_BUCKET}
         CorsConfiguration:
           CorsRules:
             - AllowedHeaders: ['*']
               AllowedMethods: [GET, PUT, POST, HEAD]
-              AllowedOrigins: ['*']
+              AllowedOrigins: ['http://localhost:5173']
               MaxAge: 3000
 
     SESBucket:
       Type: AWS::S3::Bucket
       DeletionPolicy: Retain
+      Properties:
+        BucketName: ${self:provider.environment.SES_BUCKET}
 
     AuditBucket:
       Type: AWS::S3::Bucket
       DeletionPolicy: Retain
       Properties:
+        BucketName: ${self:provider.environment.AUDIT_BUCKET}
         LifecycleConfiguration:
           Rules:
             - Id: RetainAuditLogs
@@ -1099,6 +1181,17 @@ resources:
           - ADMIN_NO_SRP_AUTH
           - USER_PASSWORD_AUTH
 
+    ApiGatewayAuthorizer:
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: CognitoUserPoolAuthorizer
+        Type: COGNITO_USER_POOLS
+        IdentitySource: method.request.header.Authorization
+        RestApiId: 
+          Ref: ApiGatewayRestApi
+        ProviderARNs:
+          - Fn::GetAtt: [CognitoUserPool, Arn]
+
   # Outputs para uso en frontend o integración con otros sistemas
   Outputs:
     ApiUrl:
@@ -1107,6 +1200,9 @@ resources:
     UserPoolId:
       Description: ID del User Pool de Cognito
       Value: !Ref CognitoUserPool
+    UserPoolArn:
+      Description: ARN del User Pool de Cognito
+      Value: !GetAtt CognitoUserPool.Arn
     UserPoolClientId:
       Description: ID del cliente de aplicación de Cognito
       Value: !Ref CognitoUserPoolClient

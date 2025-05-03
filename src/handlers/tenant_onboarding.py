@@ -9,10 +9,12 @@ import logging
 import secrets
 from datetime import datetime
 import re
+import base64
 
 # Importar utilidades
 from src.utils.s3_helper import create_folder
 from src.utils.response_helper import success_response, error_response, created_response
+from src.utils.api_gateway_helper import parse_api_gateway_event, format_api_gateway_response
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -27,6 +29,9 @@ users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
 MAIN_BUCKET = os.environ.get('MAIN_BUCKET')
 SES_BUCKET = os.environ.get('SES_BUCKET')
 USER_POOL_ID = os.environ.get('USER_POOL_ID', '')
+
+# Log para verificar si USER_POOL_ID está configurado
+logger.info(f"USER_POOL_ID configurado en variables de entorno: {USER_POOL_ID}")
 
 # Definir planes disponibles con sus límites (obtenidos de tenant_management.py)
 TENANT_PLANS = {
@@ -82,6 +87,10 @@ TENANT_PLANS = {
 
 def lambda_handler(event, context):
     """Maneja el proceso de onboarding de nuevos tenants"""
+    # Debug: Imprimir el evento completo para diagnosticar problemas
+    if os.environ.get('DEBUG') == 'true':
+        logger.info(f"DEBUG - Evento completo recibido: {json.dumps(event, indent=2)}")
+    
     # Determinar operación basada en la ruta y método HTTP
     http_method = event.get('httpMethod', '')
     path = event.get('path', '')
@@ -108,8 +117,12 @@ def onboard_new_tenant(event, context):
     4. Inicialización de configuraciones por defecto
     """
     try:
-        # Obtener datos del body
-        body = json.loads(event.get('body', '{}'))
+        # Usar el helper para parsear el evento de API Gateway
+        body = parse_api_gateway_event(event)
+        
+        if not body:
+            logger.error("No se pudo extraer un body JSON válido de la solicitud")
+            return error_response(400, "Cuerpo de solicitud inválido o ausente")
         
         # Validar campos obligatorios
         required_fields = ['name', 'plan', 'admin_email']
@@ -151,6 +164,7 @@ def onboard_new_tenant(event, context):
         if admin_email:
             admin_result = schedule_admin_creation(tenant_id, admin_email, body.get('admin_name', ''))
         
+        # Usar la función de respuesta con status 201 Created
         return created_response({
             'tenant_id': tenant_id, 
             'name': tenant_name,
@@ -422,6 +436,16 @@ def create_admin_user_internal(tenant_id, email, name=''):
         dict: Resultado de la operación
     """
     try:
+        # Verificar explícitamente que USER_POOL_ID esté configurado
+        if not USER_POOL_ID:
+            logger.error("ERROR: USER_POOL_ID no está configurado en las variables de entorno")
+            return {
+                'status': 'error',
+                'message': 'USER_POOL_ID no configurado en variables de entorno'
+            }
+            
+        logger.info(f"Creando usuario admin para tenant {tenant_id}, email {email}, USER_POOL_ID: {USER_POOL_ID}")
+        
         # Normalizar email (minúsculas, sin espacios)
         email = email.lower().strip()
         
@@ -454,8 +478,21 @@ def create_admin_user_internal(tenant_id, email, name=''):
         # Generar contraseña temporal
         temp_password = generate_temp_password()
         
+        # Crear usuario en DynamoDB primero
+        user_id = str(uuid.uuid4())
+        timestamp = datetime.now().isoformat()
+        
+        # Preparar nombre si se proporcionó
+        display_name = name if name else email.split('@')[0]
+        
         # Crear usuario en Cognito
+        cognito_id = None
         try:
+            logger.info(f"Intentando crear usuario en Cognito con UserPoolId: {USER_POOL_ID}")
+            
+            # Intenta la creación directa con AWS CLI para depuración
+            logger.info(f"Comando CLI equivalente: aws cognito-idp admin-create-user --user-pool-id {USER_POOL_ID} --username {email} --temporary-password '{temp_password}' --region eu-west-1")
+            
             cognito_response = cognito.admin_create_user(
                 UserPoolId=USER_POOL_ID,
                 Username=email,
@@ -474,19 +511,15 @@ def create_admin_user_internal(tenant_id, email, name=''):
             
         except Exception as e:
             logger.error(f"Error al crear usuario en Cognito: {str(e)}")
-            return {
-                'status': 'error',
-                'message': f"Error al crear usuario en Cognito: {str(e)}"
-            }
+            # Imprimir información detallada para depuración
+            logger.error(f"Parámetros: UserPoolId={USER_POOL_ID}, Username={email}")
+            
+            # Si falla Cognito, guardamos el usuario solo en DynamoDB y marcamos como pendiente
+            cognito_id = "pendiente-" + user_id
+            
+            logger.info(f"Guardando usuario en DynamoDB sin registro en Cognito. ID temporal: {cognito_id}")
         
-        # Crear usuario en DynamoDB
-        user_id = str(uuid.uuid4())
-        timestamp = datetime.now().isoformat()
-        
-        # Preparar nombre si se proporcionó
-        display_name = name if name else email.split('@')[0]
-        
-        user_table.put_item(Item={
+        user_item = {
             'user_id': user_id,
             'tenant_id': tenant_id,
             'email': email,
@@ -500,8 +533,12 @@ def create_admin_user_internal(tenant_id, email, name=''):
                 'language': 'es',
                 'timezone': 'UTC'
             },
-            'cognito_id': cognito_id
-        })
+            'cognito_id': cognito_id,
+            'cognito_status': 'pendiente' if cognito_id.startswith('pendiente-') else 'activo'
+        }
+        
+        logger.info(f"Guardando usuario en DynamoDB: {user_id}")
+        users_table.put_item(Item=user_item)
         
         logger.info(f"Usuario administrador guardado en DynamoDB: {user_id}")
         
@@ -529,7 +566,8 @@ def create_admin_user_internal(tenant_id, email, name=''):
             'user_id': user_id,
             'email': email,
             'temp_password': temp_password,  # Solo en desarrollo, eliminar en producción
-            'created_at': timestamp
+            'created_at': timestamp,
+            'cognito_status': 'pendiente' if cognito_id.startswith('pendiente-') else 'activo'
         }
         
     except Exception as e:
