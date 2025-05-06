@@ -7,9 +7,12 @@ import uuid
 import boto3
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import base64
+import hashlib
+import hmac
+import urllib.parse
 
 # Importar utilidades
 from src.utils.s3_helper import create_folder
@@ -29,6 +32,15 @@ users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
 MAIN_BUCKET = os.environ.get('MAIN_BUCKET')
 SES_BUCKET = os.environ.get('SES_BUCKET')
 USER_POOL_ID = os.environ.get('USER_POOL_ID', '')
+# URL base para la verificación de correo electrónico 
+VERIFICATION_BASE_URL = os.environ.get('VERIFICATION_BASE_URL', 'https://app.docpilot.com/verify')
+# Lista de dominios de correo personal a no permitir
+BLOCKED_EMAIL_DOMAINS = [
+    'gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'aol.com', 
+    'icloud.com', 'protonmail.com', 'mail.com', 'zoho.com', 'gmx.com',
+    'yandex.com', 'live.com', 'msn.com', 'me.com', 'inbox.com',
+    'qq.com', '163.com', '126.com', 'yeah.net'
+]
 
 # Log para verificar si USER_POOL_ID está configurado
 logger.info(f"USER_POOL_ID configurado en variables de entorno: {USER_POOL_ID}")
@@ -103,6 +115,8 @@ def lambda_handler(event, context):
         return create_admin_user(event, context)
     elif http_method == 'GET' and path == '/tenants/onboard/status':
         return check_onboarding_status(event, context)
+    elif http_method == 'GET' and path == '/tenants/verify-email':
+        return verify_email(event, context)
     else:
         logger.warning(f"Operación no válida: {http_method} {path}")
         return error_response(400, 'Operación no válida')
@@ -141,6 +155,11 @@ def onboard_new_tenant(event, context):
         if plan not in TENANT_PLANS:
             logger.error(f"Plan no válido: {plan}")
             return error_response(400, f"Plan no válido. Opciones disponibles: {', '.join(TENANT_PLANS.keys())}")
+        
+        # Validar que el correo sea corporativo
+        if not is_corporate_email(admin_email):
+            logger.error(f"Email no corporativo: {admin_email}")
+            return error_response(400, "Solo se permiten correos electrónicos corporativos para la creación de cuentas")
         
         logger.info(f"Iniciando onboarding para tenant: {tenant_name}, plan: {plan}, admin: {admin_email}")
         
@@ -449,6 +468,14 @@ def create_admin_user_internal(tenant_id, email, name=''):
         # Normalizar email (minúsculas, sin espacios)
         email = email.lower().strip()
         
+        # Validar que el correo sea corporativo
+        if not is_corporate_email(email):
+            logger.error(f"Email no corporativo: {email}")
+            return {
+                'status': 'error',
+                'message': 'Solo se permiten correos electrónicos corporativos para la creación de cuentas'
+            }
+        
         # Verificar que el usuario no existe ya
         email_exists = False
         try:
@@ -485,7 +512,11 @@ def create_admin_user_internal(tenant_id, email, name=''):
         # Preparar nombre si se proporcionó
         display_name = name if name else email.split('@')[0]
         
-        # Crear usuario en Cognito
+        # Crear un token de verificación de correo
+        verification_token = generate_verification_token(email, tenant_id)
+        verification_expiry = (datetime.now() + timedelta(days=3)).isoformat()
+        
+        # Crear usuario en Cognito con estado no verificado
         cognito_id = None
         try:
             logger.info(f"Intentando crear usuario en Cognito con UserPoolId: {USER_POOL_ID}")
@@ -498,9 +529,7 @@ def create_admin_user_internal(tenant_id, email, name=''):
                 Username=email,
                 UserAttributes=[
                     {'Name': 'email', 'Value': email},
-                    {'Name': 'email_verified', 'Value': 'true'},
-                    {'Name': 'custom:tenant_id', 'Value': tenant_id},
-                    {'Name': 'custom:role', 'Value': 'admin'}
+                    {'Name': 'email_verified', 'Value': 'false'}  # Cambiado a false hasta que sea verificado
                 ],
                 TemporaryPassword=temp_password,
                 MessageAction='SUPPRESS'  # Enviaremos nuestro propio email
@@ -525,7 +554,7 @@ def create_admin_user_internal(tenant_id, email, name=''):
             'email': email,
             'name': display_name,
             'role': 'admin',
-            'status': 'active',
+            'status': 'pending_verification',  # Cambiado a pendiente de verificación
             'created_at': timestamp,
             'last_login': None,
             'preferences': {
@@ -534,7 +563,9 @@ def create_admin_user_internal(tenant_id, email, name=''):
                 'timezone': 'UTC'
             },
             'cognito_id': cognito_id,
-            'cognito_status': 'pendiente' if cognito_id.startswith('pendiente-') else 'activo'
+            'cognito_status': 'pendiente_verificacion',
+            'verification_token': verification_token,
+            'verification_expiry': verification_expiry
         }
         
         logger.info(f"Guardando usuario en DynamoDB: {user_id}")
@@ -555,11 +586,11 @@ def create_admin_user_internal(tenant_id, email, name=''):
         except Exception as e:
             logger.warning(f"Error actualizando contador de usuarios: {str(e)}")
         
-        # Enviar email de bienvenida (sería implementado en un sistema de notificaciones)
+        # Enviar email de verificación en lugar del de bienvenida
         try:
-            send_welcome_email(email, tenant_id, temp_password)
+            send_verification_email(email, tenant_id, verification_token, temp_password)
         except Exception as e:
-            logger.warning(f"Error enviando email de bienvenida: {str(e)}")
+            logger.warning(f"Error enviando email de verificación: {str(e)}")
         
         return {
             'status': 'success',
@@ -567,7 +598,8 @@ def create_admin_user_internal(tenant_id, email, name=''):
             'email': email,
             'temp_password': temp_password,  # Solo en desarrollo, eliminar en producción
             'created_at': timestamp,
-            'cognito_status': 'pendiente' if cognito_id.startswith('pendiente-') else 'activo'
+            'cognito_status': 'pendiente_verificacion',
+            'message': 'Usuario creado. Debe verificar su correo electrónico para activar su cuenta.'
         }
         
     except Exception as e:
@@ -721,17 +753,48 @@ def generate_temp_password():
     """Genera una contraseña temporal segura"""
     return f"DocP!{secrets.token_hex(8)}"
 
-def send_welcome_email(email, tenant_id, temp_password):
+def is_corporate_email(email):
     """
-    Envía un email de bienvenida al administrador
+    Verifica si un correo electrónico es corporativo y no personal
     
     Args:
-        email (str): Email del administrador
-        tenant_id (str): ID del tenant
-        temp_password (str): Contraseña temporal
+        email (str): Correo electrónico a verificar
+        
+    Returns:
+        bool: True si es corporativo, False si es personal
     """
-    # Obtener información del tenant
+    if not email or '@' not in email:
+        return False
+        
+    domain = email.split('@')[1].lower()
+    
+    # Verificar si está en la lista de dominios personales bloqueados
+    if domain in BLOCKED_EMAIL_DOMAINS:
+        return False
+        
+    return True
+
+def generate_verification_token(email, tenant_id):
+    """
+    Genera un token seguro para verificación de correo
+    
+    Args:
+        email (str): Correo electrónico
+        tenant_id (str): ID del tenant
+        
+    Returns:
+        str: Token de verificación
+    """
+    # Crear un token basado en email, tenant_id y un componente aleatorio
+    data = f"{email}:{tenant_id}:{secrets.token_hex(16)}"
+    return base64.urlsafe_b64encode(data.encode()).decode()
+
+def send_verification_email(email, tenant_id, verification_token, temp_password):
+    """
+    Envía un email de verificación al usuario
+    """
     try:
+        # Obtener información del tenant
         tenant_response = tenant_table.get_item(Key={'tenant_id': tenant_id})
         if 'Item' not in tenant_response:
             logger.error(f"Tenant no encontrado: {tenant_id}")
@@ -740,37 +803,232 @@ def send_welcome_email(email, tenant_id, temp_password):
         tenant = tenant_response['Item']
         tenant_name = tenant.get('name', tenant_id)
         
-        # Verificar si el tenant tiene dominio verificado para envío de correos
-        # En caso contrario, usar dominio por defecto de DocPilot
-        sender_domain = tenant.get('settings', {}).get('email_domain', 'docpilot.com')
+        # Usar el remitente configurado en la variable de entorno
+        sender_email = os.environ.get('SES_SENDER_EMAIL', 'ruly.altamirano@ereace.es')
+        logger.info(f"Usando remitente verificado: {sender_email}")
         
-        # Verificar si el dominio está verificado en SES
-        domain_verified = False
-        try:
-            verification_response = ses.get_identity_verification_attributes(
-                Identities=[sender_domain]
-            )
-            
-            domain_attributes = verification_response.get('VerificationAttributes', {}).get(sender_domain, {})
-            domain_verified = domain_attributes.get('VerificationStatus') == 'Success'
-        except Exception as e:
-            logger.warning(f"Error verificando dominio: {str(e)}")
-        
-        # Usar dominio verificado o fallback a dominio por defecto
-        sender_email = f"no-reply@{sender_domain}" if domain_verified else "no-reply@docpilot.com"
+        # Generar URL de verificación
+        verification_url = f"{VERIFICATION_BASE_URL}?token={urllib.parse.quote(verification_token)}&tenant={tenant_id}"
         
         # Preparar mensaje
-        subject = f"Bienvenido a {tenant_name} en DocPilot"
+        subject = f"Verifique su correo para activar su cuenta en {tenant_name}"
         
         body_text = f"""
-        Bienvenido a {tenant_name} en DocPilot!
+        ¡Gracias por registrarse en {tenant_name}!
         
-        Su cuenta de administrador ha sido creada correctamente. Ahora puede acceder al sistema con las siguientes credenciales:
+        Para completar el proceso de registro y activar su cuenta, por favor haga clic en el siguiente enlace:
+        
+        {verification_url}
+        
+        Este enlace expirará en 3 días.
+        
+        Una vez verificada su cuenta, podrá iniciar sesión con:
         
         Email: {email}
         Contraseña temporal: {temp_password}
         
         Importante: Deberá cambiar la contraseña temporal en su primer inicio de sesión.
+        
+        Si usted no solicitó esta cuenta, simplemente ignore este correo.
+        
+        Atentamente,
+        El equipo de DocPilot
+        """
+        
+        # Enviar email
+        try:
+            ses.send_email(
+                Source=sender_email,
+                Destination={'ToAddresses': [email]},
+                Message={
+                    'Subject': {'Data': subject},
+                    'Body': {
+                        'Text': {'Data': body_text}
+                    }
+                }
+            )
+            logger.info(f"Email de verificación enviado a: {email}")
+            return True
+        except Exception as e:
+            logger.error(f"Error enviando email mediante SES: {str(e)}")
+            logger.error(f"Detalles de envío - De: {sender_email}, Para: {email}")
+            return False
+        
+    except Exception as e:
+        logger.error(f"Error enviando email de verificación: {str(e)}")
+        return False
+
+def verify_email(event, context):
+    """
+    Verifica un correo electrónico y activa la cuenta del usuario
+    
+    Args:
+        event: Evento de API Gateway
+        context: Contexto de Lambda
+        
+    Returns:
+        dict: Respuesta formateada para API Gateway
+    """
+    try:
+        # Obtener token y tenant_id de los query params
+        query_params = event.get('queryStringParameters', {}) or {}
+        token = query_params.get('token')
+        tenant_id = query_params.get('tenant')
+        
+        if not token or not tenant_id:
+            logger.error("Faltan parámetros token o tenant")
+            return error_response(400, 'Los parámetros token y tenant son obligatorios')
+        
+        # Buscar usuario con ese token
+        response = users_table.scan(
+            FilterExpression="tenant_id = :t AND verification_token = :v",
+            ExpressionAttributeValues={
+                ":t": tenant_id,
+                ":v": token
+            }
+        )
+        
+        user_items = response.get('Items', [])
+        
+        if not user_items:
+            logger.error(f"Token de verificación no válido: {token}")
+            return error_response(400, 'Token de verificación no válido o expirado')
+        
+        user = user_items[0]
+        email = user.get('email')
+        user_id = user.get('user_id')
+        cognito_id = user.get('cognito_id')
+        
+        # Verificar si el token ha expirado
+        expiry = user.get('verification_expiry')
+        if expiry and datetime.fromisoformat(expiry) < datetime.now():
+            logger.error(f"Token de verificación expirado para el usuario: {email}")
+            return error_response(400, 'El token de verificación ha expirado')
+        
+        # Activar usuario en DynamoDB
+        users_table.update_item(
+            Key={'user_id': user_id},
+            UpdateExpression="SET #s = :s, cognito_status = :cs, email_verified = :v",
+            ExpressionAttributeNames={
+                '#s': 'status'
+            },
+            ExpressionAttributeValues={
+                ':s': 'active',
+                ':cs': 'activo',
+                ':v': True
+            }
+        )
+        
+        logger.info(f"Usuario {user_id} verificado correctamente en DynamoDB")
+        
+        # Actualizar usuario en Cognito si existe
+        if cognito_id and not cognito_id.startswith('pendiente-'):
+            try:
+                cognito.admin_update_user_attributes(
+                    UserPoolId=USER_POOL_ID,
+                    Username=cognito_id,
+                    UserAttributes=[
+                        {'Name': 'email_verified', 'Value': 'true'}
+                    ]
+                )
+                logger.info(f"Usuario Cognito actualizado: {cognito_id}")
+            except Exception as e:
+                logger.error(f"Error al actualizar usuario en Cognito: {str(e)}")
+        # Crear usuario en Cognito si no existe
+        elif cognito_id and cognito_id.startswith('pendiente-'):
+            try:
+                logger.info(f"Creando usuario en Cognito después de verificación para: {email}")
+                
+                # Generar contraseña temporal
+                temp_password = generate_temp_password()
+                
+                # Crear usuario en Cognito
+                cognito_response = cognito.admin_create_user(
+                    UserPoolId=USER_POOL_ID,
+                    Username=email,
+                    UserAttributes=[
+                        {'Name': 'email', 'Value': email},
+                        {'Name': 'email_verified', 'Value': 'true'}
+                    ],
+                    TemporaryPassword=temp_password,
+                    MessageAction='SUPPRESS'  # No enviar email, ya enviaremos el nuestro
+                )
+                
+                # Obtener ID de Cognito y actualizar en DynamoDB
+                new_cognito_id = cognito_response['User']['Username']
+                users_table.update_item(
+                    Key={'user_id': user_id},
+                    UpdateExpression="SET cognito_id = :cid",
+                    ExpressionAttributeValues={
+                        ':cid': new_cognito_id
+                    }
+                )
+                
+                logger.info(f"Usuario creado en Cognito después de verificación: {new_cognito_id}")
+            except Exception as e:
+                logger.error(f"Error creando usuario en Cognito después de verificación: {str(e)}")
+                # Continuar el proceso aunque falle la creación en Cognito
+        
+        # Enviar email de bienvenida ahora que está verificado
+        try:
+            send_welcome_after_verification(email, tenant_id)
+        except Exception as e:
+            logger.warning(f"Error enviando email de bienvenida después de verificación: {str(e)}")
+        
+        # Obtener la base URL de la variable de entorno para construir la URL de redirección
+        app_base_url = "https://app.docpilot.com"  # URL explícita para redirección
+        
+        # Construir URL completa para la redirección
+        redirect_url = f"{app_base_url}/login?verified=true&tenant={tenant_id}"
+        
+        logger.info(f"Respuesta exitosa con URL de redirección: {redirect_url}")
+        
+        # Devolver una redirección con headers CORS
+        return {
+            'statusCode': 302,  # Código de redirección
+            'headers': {
+                'Location': redirect_url,
+                'Content-Type': 'text/html',
+                'Access-Control-Allow-Origin': '*',  # Permitir acceso desde cualquier origen
+                'Access-Control-Allow-Methods': 'GET,OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,Origin'
+            },
+            'body': '<html><body>Correo verificado. Redirigiendo...</body></html>'
+        }
+        
+    except Exception as e:
+        logger.error(f"Error verificando correo electrónico: {str(e)}")
+        return error_response(500, f"Error en la verificación: {str(e)}")
+
+def send_welcome_after_verification(email, tenant_id):
+    """
+    Envía un email de bienvenida después de la verificación
+    
+    Args:
+        email (str): Email del usuario
+        tenant_id (str): ID del tenant
+    """
+    try:
+        # Obtener información del tenant
+        tenant_response = tenant_table.get_item(Key={'tenant_id': tenant_id})
+        if 'Item' not in tenant_response:
+            logger.error(f"Tenant no encontrado: {tenant_id}")
+            return False
+        
+        tenant = tenant_response['Item']
+        tenant_name = tenant.get('name', tenant_id)
+        
+        # Usar el remitente configurado en la variable de entorno
+        sender_email = os.environ.get('SES_SENDER_EMAIL', 'no-reply@docpilot.com')
+        logger.info(f"Usando remitente verificado para bienvenida: {sender_email}")
+        
+        # Preparar mensaje
+        subject = f"¡Bienvenido a {tenant_name} en DocPilot!"
+        
+        body_text = f"""
+        ¡Felicidades! Su cuenta ha sido verificada y activada correctamente.
+        
+        Ahora puede acceder a la plataforma DocPilot con su correo electrónico y la contraseña temporal proporcionada anteriormente.
         
         Acceda a la plataforma en: https://app.docpilot.com
         
@@ -779,20 +1037,25 @@ def send_welcome_email(email, tenant_id, temp_password):
         """
         
         # Enviar email
-        ses.send_email(
-            Source=sender_email,
-            Destination={'ToAddresses': [email]},
-            Message={
-                'Subject': {'Data': subject},
-                'Body': {
-                    'Text': {'Data': body_text}
+        try:
+            ses.send_email(
+                Source=sender_email,
+                Destination={'ToAddresses': [email]},
+                Message={
+                    'Subject': {'Data': subject},
+                    'Body': {
+                        'Text': {'Data': body_text}
+                    }
                 }
-            }
-        )
-        
-        logger.info(f"Email de bienvenida enviado a: {email}")
-        return True
+            )
+            logger.info(f"Email de bienvenida enviado después de verificación a: {email}")
+            return True
+        except Exception as e:
+            logger.error(f"Error enviando email de bienvenida mediante SES: {str(e)}")
+            # Registrar detalles adicionales del error para depuración
+            logger.error(f"Detalles de envío - De: {sender_email}, Para: {email}")
+            return False
         
     except Exception as e:
-        logger.error(f"Error enviando email de bienvenida: {str(e)}")
+        logger.error(f"Error enviando email de bienvenida después de verificación: {str(e)}")
         return False

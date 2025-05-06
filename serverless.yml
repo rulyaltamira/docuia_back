@@ -35,6 +35,10 @@ provider:
     SES_BUCKET: ${self:service}-ses-${self:provider.stage}
     AUDIT_BUCKET: ${self:service}-audit-${self:provider.stage}
     BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
+    # Base URL para verificación de correo electrónico (variable según el entorno)
+    VERIFICATION_BASE_URL: ${env:VERIFICATION_BASE_URL, 'https://verify.docpilot.link'}
+    # Correo electrónico verificado para enviar correos desde SES
+    SES_SENDER_EMAIL: ${env:SES_SENDER_EMAIL, 'ruly.altamirano@ereace.es'}
   
   # Permisos IAM para todas las funciones (Rol Global)
   iam:
@@ -337,6 +341,13 @@ functions:
           - arn:aws:s3:::${self:provider.environment.MAIN_BUCKET}
           - arn:aws:s3:::${self:provider.environment.SES_BUCKET}
           - arn:aws:s3:::${self:provider.environment.AUDIT_BUCKET}
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: 
+          - "arn:aws:ses:${self:provider.region}:*:identity/*"
     events:
       - http:
           path: tenants/onboard
@@ -350,6 +361,36 @@ functions:
           path: tenants/onboard/status
           method: get
           cors: true
+      - http:
+          path: tenants/verify-email
+          method: get
+          cors:
+            origin: 'https://verify.docpilot.link'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - Origin
+            allowCredentials: false
+      - http:
+          path: tenants/verify-email
+          method: options
+          cors:
+            origin: 'https://verify.docpilot.link'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - Origin
+            allowCredentials: false
 
   userManagement:
     handler: src/handlers/user_management.lambda_handler
@@ -892,6 +933,53 @@ functions:
           method: get
           cors: true
 
+  verifyEmail:
+    handler: src/handlers/verify_email.lambda_handler
+    description: Verifica el email de un usuario
+    memorySize: 128
+    timeout: 10
+    package:
+      patterns:
+        - 'src/handlers/verify_email.py'
+        - 'src/utils/**'
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: "*"
+      - Effect: Allow
+        Action:
+          - cognito-idp:AdminConfirmSignUp
+          - cognito-idp:AdminUpdateUserAttributes
+          - cognito-idp:AdminGetUser
+        Resource: 
+          - arn:aws:cognito-idp:eu-west-1:*:userpool/eu-west-1_uJTvs1HT7
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:UpdateItem
+          - dynamodb:Scan
+        Resource: 
+          - !GetAtt UsersTable.Arn
+    events:
+      - http:
+          path: tenants/verify-email
+          method: get
+          cors:
+            origin: 'https://verify.docpilot.link'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - Origin
+            allowCredentials: false
+
 # Definición de recursos
 resources:
   Resources:
@@ -1154,7 +1242,7 @@ resources:
     CognitoUserPool:
       Type: AWS::Cognito::UserPool
       Properties:
-        UserPoolName: ${self:service}-user-pool-${self:provider.stage}
+        UserPoolName: ${self:service}-user-pool-${self:provider.stage}-new
         AutoVerifiedAttributes:
           - email
         Schema:

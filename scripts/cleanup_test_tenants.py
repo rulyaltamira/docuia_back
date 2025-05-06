@@ -25,7 +25,7 @@ cognito = boto3.client('cognito-idp', region_name='eu-west-1')
 TENANTS_TABLE = 'docpilot-newsystem-v2-tenants-dev'
 USERS_TABLE = 'docpilot-newsystem-v2-users-dev'
 MAIN_BUCKET = 'docpilot-newsystem-v2-main-dev'
-USER_POOL_ID = 'eu-west-1_U76ZEVpde'
+USER_POOL_ID = 'eu-west-1_uJTvs1HT7'
 
 def confirm_action(message):
     """Solicita confirmación al usuario"""
