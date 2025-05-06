@@ -1,4 +1,4 @@
-# docpilot-backend/scripts/normalize_s3_keys.py
+# docpilot-backend/src/utils/normalize_s3_keys.py
 """
 Script para normalizar nombres de archivos en S3 que contienen caracteres especiales.
 Este script:
@@ -24,7 +24,6 @@ import urllib.parse
 import time
 
 # Importar módulo de utilidades para manejo de rutas S3
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils.s3_path_helper import encode_s3_key, decode_s3_key, is_encoded, extract_filename_from_key, split_s3_path
 
 # Configuración del logger
@@ -200,128 +199,64 @@ def normalize_objects(bucket, objects, contracts_table, dry_run=False, delete_or
             documents = get_dynamodb_documents_by_s3_key(contracts_table, key)
             
             # Actualizar referencias en DynamoDB
-            db_updated = 0
             for doc in documents:
-                doc_id = doc.get('id')
-                if update_dynamodb_document(contracts_table, doc_id, key, new_key):
-                    logger.info(f"Actualizada referencia en DynamoDB para documento {doc_id}")
-                    db_updated += 1
-                else:
-                    logger.error(f"Error actualizando referencia en DynamoDB para documento {doc_id}")
-            
-            results['db_updated'] += db_updated
-            
-            # Eliminar objeto original si se solicita
-            if delete_originals:
-                if delete_s3_object(bucket, key):
-                    logger.info(f"Eliminado original: {key}")
-                    results['deleted'] += 1
-                else:
-                    logger.error(f"Error eliminando original: {key}")
-            
+                if update_dynamodb_document(contracts_table, doc['id'], key, new_key):
+                    results['db_updated'] += 1
+                    logger.info(f"Actualizada referencia en DynamoDB para {doc['id']}")
+                
+            # Si se solicita, eliminar el original
+            if delete_originals and delete_s3_object(bucket, key):
+                results['deleted'] += 1
+                logger.info(f"Eliminado objeto original: {key}")
+                
             results['succeeded'] += 1
         else:
-            logger.error(f"Error copiando objeto: {key}")
             results['failed'] += 1
+            logger.error(f"Error procesando objeto: {key}")
     
     return results
 
 def main():
-    """Función principal del script"""
-    parser = argparse.ArgumentParser(description='Normaliza nombres de archivos en S3 con caracteres especiales')
-    parser.add_argument('--bucket', help='Nombre del bucket S3 a procesar')
-    parser.add_argument('--tenant', help='ID del tenant a procesar (opcional)')
-    parser.add_argument('--prefix', help='Prefijo de ruta S3 a procesar (opcional)')
-    parser.add_argument('--contracts-table', help='Nombre de la tabla DynamoDB de contratos')
-    parser.add_argument('--dry-run', action='store_true', help='Ejecutar sin realizar cambios')
-    parser.add_argument('--delete-originals', action='store_true', help='Eliminar archivos originales después de copiarlos')
-    
+    """Función principal"""
+    parser = argparse.ArgumentParser(description='Normaliza nombres de archivos en S3')
+    parser.add_argument('--bucket', help='Nombre del bucket S3')
+    parser.add_argument('--tenant', help='ID del tenant a procesar')
+    parser.add_argument('--dry-run', action='store_true', help='Solo simular operaciones')
+    parser.add_argument('--delete-originals', action='store_true', help='Eliminar archivos originales')
     args = parser.parse_args()
-    
-    # Determinar el bucket a usar
-    bucket_to_use = None
-    if args.bucket:
-        bucket_to_use = args.bucket
-    else:
-        docpilot_buckets = get_docpilot_buckets()
-        if len(docpilot_buckets) == 1:
-            bucket_to_use = docpilot_buckets[0]
-        elif len(docpilot_buckets) > 1:
-            print("Se encontraron múltiples buckets de DocPilot:")
-            for i, bucket in enumerate(docpilot_buckets):
-                print(f"{i+1}. {bucket}")
-            choice = input("Seleccione el número del bucket a usar: ")
-            try:
-                bucket_to_use = docpilot_buckets[int(choice) - 1]
-            except (ValueError, IndexError):
-                print("Selección inválida")
-                sys.exit(1)
-        else:
-            print("No se encontraron buckets de DocPilot. Especifique uno con --bucket")
-            sys.exit(1)
-    
-    # Determinar la tabla DynamoDB a usar
-    contracts_table = None
-    if args.contracts_table:
-        contracts_table = args.contracts_table
-    else:
-        # Intentar inferir nombre de tabla a partir del bucket
-        if 'dev' in bucket_to_use:
-            contracts_table = 'docpilot-newsystem-contracts-dev'
-        elif 'prod' in bucket_to_use:
-            contracts_table = 'docpilot-newsystem-contracts-prod'
-        else:
-            contracts_table = 'docpilot-newsystem-contracts-dev'  # Por defecto
-        
-        confirm = input(f"Se usará la tabla DynamoDB '{contracts_table}'. ¿Es correcto? (s/n): ")
-        if confirm.lower() != 's':
-            print("Especifique la tabla con --contracts-table")
-            sys.exit(1)
-    
-    # Mostrar resumen de la operación
-    print("\nResumen de la operación:")
-    print(f"- Bucket: {bucket_to_use}")
-    print(f"- Tabla DynamoDB: {contracts_table}")
-    if args.tenant:
-        print(f"- Tenant: {args.tenant}")
-    if args.prefix:
-        print(f"- Prefijo: {args.prefix}")
-    print(f"- Modo: {'Simulación (no se realizarán cambios)' if args.dry_run else 'Ejecución real'}")
-    print(f"- Eliminar originales: {'Sí' if args.delete_originals else 'No'}")
-    
-    if not args.dry_run:
-        confirm = input("\n¡ADVERTENCIA! Esta operación modificará archivos y datos. ¿Continuar? (s/n): ")
-        if confirm.lower() != 's':
-            print("Operación cancelada")
-            sys.exit(0)
-    
-    # Listar objetos S3
-    logger.info(f"Listando objetos en bucket {bucket_to_use}")
-    objects = list_s3_objects(bucket_to_use, args.prefix, args.tenant)
-    logger.info(f"Se encontraron {len(objects)} objetos")
-    
-    # Normalizar objetos
-    start_time = time.time()
-    results = normalize_objects(
-        bucket_to_use, 
-        objects, 
-        contracts_table, 
-        dry_run=args.dry_run, 
-        delete_originals=args.delete_originals
-    )
-    end_time = time.time()
-    
-    # Mostrar resultados
-    logger.info("\nResumen de la normalización:")
-    logger.info(f"- Total de objetos analizados: {results['total']}")
-    logger.info(f"- Objetos que necesitaban codificación: {results['need_encoding']}")
-    if not args.dry_run:
-        logger.info(f"- Objetos codificados exitosamente: {results['succeeded']}")
-        logger.info(f"- Objetos con errores: {results['failed']}")
-        logger.info(f"- Documentos DynamoDB actualizados: {results['db_updated']}")
-        if args.delete_originals:
-            logger.info(f"- Objetos originales eliminados: {results['deleted']}")
-    logger.info(f"- Tiempo total de ejecución: {end_time - start_time:.2f} segundos")
 
-if __name__ == "__main__":
-    main()
+    # Si no se especifica bucket, usar todos los buckets de DocPilot
+    buckets = [args.bucket] if args.bucket else get_docpilot_buckets()
+    
+    for bucket in buckets:
+        logger.info(f"Procesando bucket: {bucket}")
+        
+        # Listar objetos en el bucket
+        objects = list_s3_objects(bucket, tenant_id=args.tenant)
+        
+        if not objects:
+            logger.info(f"No se encontraron objetos en {bucket}")
+            continue
+            
+        # Normalizar objetos
+        results = normalize_objects(
+            bucket=bucket,
+            objects=objects,
+            contracts_table='docpilot-contracts',
+            dry_run=args.dry_run,
+            delete_originals=args.delete_originals
+        )
+        
+        # Mostrar resultados
+        logger.info(f"""
+        Resultados para {bucket}:
+        - Total objetos: {results['total']}
+        - Necesitan codificación: {results['need_encoding']}
+        - Exitosos: {results['succeeded']}
+        - Fallidos: {results['failed']}
+        - Referencias DB actualizadas: {results['db_updated']}
+        - Originales eliminados: {results['deleted']}
+        """)
+
+if __name__ == '__main__':
+    main() 

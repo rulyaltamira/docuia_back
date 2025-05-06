@@ -80,12 +80,58 @@ def lambda_handler(event, context):
         logger.info(f"Verificando email para usuario: {email}")
         
         try:
+            # Verificar estado actual del usuario en Cognito
+            try:
+                user_info = cognito.admin_get_user(
+                    UserPoolId=USER_POOL_ID,
+                    Username=email
+                )
+                current_status = user_info.get('UserStatus')
+                
+                # Si el usuario ya está en FORCE_CHANGE_PASSWORD, significa que ya está verificado
+                if current_status == 'FORCE_CHANGE_PASSWORD':
+                    logger.info(f"Usuario {email} ya está verificado y pendiente de cambio de contraseña")
+                    # Actualizar estado en DynamoDB si es necesario
+                    users_table.update_item(
+                        Key={'user_id': user_id},
+                        UpdateExpression="SET #status = :s, email_verified = :v, cognito_status = :cs",
+                        ExpressionAttributeNames={
+                            '#status': 'status'
+                        },
+                        ExpressionAttributeValues={
+                            ':s': 'active',
+                            ':v': True,
+                            ':cs': 'FORCE_CHANGE_PASSWORD'
+                        }
+                    )
+                    return {
+                        'statusCode': 200,
+                        'headers': {
+                            'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
+                            'Access-Control-Allow-Credentials': 'false'
+                        },
+                        'body': json.dumps({
+                            'message': 'Tu email ya está verificado. Por favor, inicia sesión con tu contraseña temporal y cámbiala cuando el sistema te lo solicite.',
+                            'status': 'already_verified'
+                        })
+                    }
+            except Exception as e:
+                logger.error(f"Error verificando estado en Cognito: {str(e)}")
+                # Continuamos con el proceso normal si no podemos verificar el estado
+            
             # Confirmar el registro del usuario en Cognito
-            cognito.admin_confirm_sign_up(
-                UserPoolId=USER_POOL_ID,
-                Username=email
-            )
-            logger.info(f"Registro confirmado en Cognito para: {email}")
+            try:
+                cognito.admin_confirm_sign_up(
+                    UserPoolId=USER_POOL_ID,
+                    Username=email
+                )
+                logger.info(f"Registro confirmado en Cognito para: {email}")
+            except cognito.exceptions.NotAuthorizedException as e:
+                if 'User cannot be confirmed. Current status is FORCE_CHANGE_PASSWORD' in str(e):
+                    logger.info(f"Usuario {email} ya está confirmado y pendiente de cambio de contraseña")
+                    # No es un error, continuamos con la actualización de atributos
+                else:
+                    raise e
             
             # Actualizar atributos del usuario en Cognito
             cognito.admin_update_user_attributes(
@@ -107,7 +153,7 @@ def lambda_handler(event, context):
                 ExpressionAttributeValues={
                     ':s': 'active',
                     ':v': True,
-                    ':cs': 'CONFIRMED'
+                    ':cs': 'FORCE_CHANGE_PASSWORD'
                 }
             )
             logger.info(f"Estado actualizado en DynamoDB para usuario: {user_id}")
@@ -115,27 +161,43 @@ def lambda_handler(event, context):
             # Enviar correo de confirmación y verificar resultado
             email_sent = send_confirmation_email(email)
             if not email_sent:
-                logger.error("No se pudo enviar el correo de confirmación")
-                # No retornamos error aquí porque el usuario ya está verificado
+                logger.warning("No se pudo enviar el correo de confirmación, pero el usuario está verificado")
             
             # Redirigir al usuario a la página de inicio de sesión
             return {
-                'statusCode': 302,
+                'statusCode': 200,
                 'headers': {
-                    'Location': 'https://verify.docpilot.link/success',
                     'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
                     'Access-Control-Allow-Credentials': 'false'
                 },
-                'body': json.dumps({'message': 'Email verificado correctamente'})
+                'body': json.dumps({
+                    'message': 'Email verificado correctamente. Por favor, inicia sesión con tu contraseña temporal y cámbiala cuando el sistema te lo solicite.',
+                    'status': 'verified'
+                })
             }
             
         except Exception as e:
-            logger.error(f"Error actualizando usuario en Cognito/DynamoDB: {str(e)}")
-            return error_response(500, 'Error al verificar el email')
+            error_msg = str(e)
+            logger.error(f"Error actualizando usuario en Cognito/DynamoDB: {error_msg}")
+            
+            if 'User cannot be confirmed. Current status is FORCE_CHANGE_PASSWORD' in error_msg:
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
+                        'Access-Control-Allow-Credentials': 'false'
+                    },
+                    'body': json.dumps({
+                        'message': 'Tu email ya está verificado. Por favor, inicia sesión con tu contraseña temporal y cámbiala cuando el sistema te lo solicite.',
+                        'status': 'already_verified'
+                    })
+                }
+            else:
+                return error_response(500, 'Error al verificar el email. Por favor, contacta con soporte técnico.')
             
     except Exception as e:
         logger.error(f"Error en el proceso de verificación: {str(e)}")
-        return error_response(500, f"Error en la verificación: {str(e)}")
+        return error_response(500, 'Error inesperado en la verificación. Por favor, contacta con soporte técnico.')
 
 def send_confirmation_email(email):
     """

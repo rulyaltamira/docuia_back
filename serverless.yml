@@ -361,36 +361,6 @@ functions:
           path: tenants/onboard/status
           method: get
           cors: true
-      - http:
-          path: tenants/verify-email
-          method: get
-          cors:
-            origin: 'https://verify.docpilot.link'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-              - X-Amz-User-Agent
-              - X-Amzn-Trace-Id
-              - Origin
-            allowCredentials: false
-      - http:
-          path: tenants/verify-email
-          method: options
-          cors:
-            origin: 'https://verify.docpilot.link'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-              - X-Amz-User-Agent
-              - X-Amzn-Trace-Id
-              - Origin
-            allowCredentials: false
 
   userManagement:
     handler: src/handlers/user_management.lambda_handler
@@ -936,8 +906,8 @@ functions:
   verifyEmail:
     handler: src/handlers/verify_email.lambda_handler
     description: Verifica el email de un usuario
-    memorySize: 128
-    timeout: 10
+    memorySize: 256
+    timeout: 20
     package:
       patterns:
         - 'src/handlers/verify_email.py'
@@ -955,7 +925,7 @@ functions:
           - cognito-idp:AdminUpdateUserAttributes
           - cognito-idp:AdminGetUser
         Resource: 
-          - arn:aws:cognito-idp:eu-west-1:*:userpool/eu-west-1_uJTvs1HT7
+          - !GetAtt CognitoUserPool.Arn
       - Effect: Allow
         Action:
           - dynamodb:GetItem
@@ -978,7 +948,12 @@ functions:
               - X-Amz-User-Agent
               - X-Amzn-Trace-Id
               - Origin
+              - Accept
+              - Referer
+              - Access-Control-Request-Method
+              - Access-Control-Request-Headers
             allowCredentials: false
+            maxAge: 3600
 
 # Definición de recursos
 resources:
@@ -1197,7 +1172,10 @@ resources:
           CorsRules:
             - AllowedHeaders: ['*']
               AllowedMethods: [GET, PUT, POST, HEAD]
-              AllowedOrigins: ['http://localhost:5173']
+              AllowedOrigins: 
+                - 'http://localhost:5173'
+                - 'https://verify.docpilot.link'
+                - 'https://www.docpilot.link'
               MaxAge: 3000
 
     SESBucket:
