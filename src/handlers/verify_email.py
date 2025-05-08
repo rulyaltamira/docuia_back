@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from src.utils.response_helper import success_response, error_response
 import time
+import uuid
 
 # Configuración de logging
 logger = logging.getLogger()
@@ -17,6 +18,9 @@ ses = boto3.client('ses')
 
 # Obtener nombres de tablas de variables de entorno
 users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
+roles_table = dynamodb.Table(os.environ.get('ROLES_TABLE'))
+user_roles_table = dynamodb.Table(os.environ.get('USER_ROLES_TABLE'))
+role_permissions_table = dynamodb.Table(os.environ.get('ROLE_PERMISSIONS_TABLE'))
 USER_POOL_ID = os.environ.get('USER_POOL_ID', 'eu-west-1_uJTvs1HT7')
 SES_SENDER_EMAIL = os.environ.get('SES_SENDER_EMAIL', 'ruly.altamirano@ereace.es')
 
@@ -104,10 +108,108 @@ def lambda_handler(event, context):
                             ':cs': 'FORCE_CHANGE_PASSWORD'
                         }
                     )
+                    
+                    # NUEVO: Asignar rol de administrador al usuario si no tiene ninguno asignado
+                    try:
+                        # Verificar si ya tiene roles asignados
+                        user_roles_response = user_roles_table.scan(
+                            FilterExpression="user_id = :u AND tenant_id = :t",
+                            ExpressionAttributeValues={
+                                ":u": user_id,
+                                ":t": tenant_id
+                            }
+                        )
+                        
+                        if not user_roles_response.get('Items'):
+                            # Buscar rol admin para este tenant
+                            admin_roles = roles_table.scan(
+                                FilterExpression="tenant_id = :t AND role_name = :r",
+                                ExpressionAttributeValues={
+                                    ':t': tenant_id,
+                                    ':r': 'admin'
+                                }
+                            ).get('Items', [])
+                            
+                            if admin_roles:
+                                admin_role_id = admin_roles[0]['role_id']
+                                timestamp = datetime.now().isoformat()
+                                
+                                # Asignar el rol al usuario
+                                user_role_id = str(uuid.uuid4())
+                                user_roles_table.put_item(Item={
+                                    'id': user_role_id,
+                                    'user_id': user_id,
+                                    'role_id': admin_role_id,
+                                    'tenant_id': tenant_id,
+                                    'created_at': timestamp
+                                })
+                                
+                                logger.info(f"Rol admin asignado al usuario ya verificado: {user_id}")
+                            else:
+                                # Crear rol admin si no existe
+                                admin_role_id = str(uuid.uuid4())
+                                timestamp = datetime.now().isoformat()
+                                
+                                # Crear rol admin
+                                roles_table.put_item(Item={
+                                    'role_id': admin_role_id,
+                                    'tenant_id': tenant_id,
+                                    'role_name': 'admin',
+                                    'description': 'Administrador del sistema con acceso completo',
+                                    'created_at': timestamp,
+                                    'updated_at': timestamp,
+                                    'created_by': 'system',
+                                    'is_system_role': True,
+                                    'status': 'active'
+                                })
+                                
+                                logger.info(f"Rol admin creado para tenant {tenant_id}")
+                                
+                                # Asignar permisos estándar al rol admin
+                                system_permissions = [
+                                    'document:read', 'document:create', 'document:update', 'document:delete', 'document:download',
+                                    'user:read', 'user:create', 'user:update', 'user:delete',
+                                    'role:read', 'role:create', 'role:update', 'role:delete', 'role:assign',
+                                    'tenant:read', 'tenant:update', 'tenant:configure',
+                                    'alert:read', 'alert:manage', 'alert:rule',
+                                    'stats:view', 'stats:advanced', 'stats:export',
+                                    'audit:view', 'audit:export',
+                                    'email:configure',
+                                    'admin:full'
+                                ]
+                                
+                                for permission in system_permissions:
+                                    permission_id = str(uuid.uuid4())
+                                    role_permissions_table.put_item(Item={
+                                        'id': permission_id,
+                                        'role_id': admin_role_id,
+                                        'permission': permission,
+                                        'tenant_id': tenant_id,
+                                        'created_at': timestamp
+                                    })
+                                
+                                # Asignar el rol al usuario
+                                user_role_id = str(uuid.uuid4())
+                                user_roles_table.put_item(Item={
+                                    'id': user_role_id,
+                                    'user_id': user_id,
+                                    'role_id': admin_role_id,
+                                    'tenant_id': tenant_id,
+                                    'created_at': timestamp
+                                })
+                                
+                                logger.info(f"Rol admin creado y asignado al usuario: {user_id}")
+                        else:
+                            logger.info(f"El usuario {user_id} ya tiene roles asignados")
+                            
+                    except Exception as e:
+                        logger.error(f"Error asignando rol admin al usuario verificado: {str(e)}")
+                        # Continuar el proceso aunque falle la asignación de rol
+                    
                     return {
                         'statusCode': 200,
                         'headers': {
-                            'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
+                            'Access-Control-Allow-Origin': '*',
                             'Access-Control-Allow-Credentials': 'false'
                         },
                         'body': json.dumps({
@@ -158,7 +260,104 @@ def lambda_handler(event, context):
             )
             logger.info(f"Estado actualizado en DynamoDB para usuario: {user_id}")
             
-            # Enviar correo de confirmación y verificar resultado
+            # NUEVO: Asignar rol de administrador al usuario si no tiene ninguno asignado
+            try:
+                # Verificar si ya tiene roles asignados
+                user_roles_response = user_roles_table.scan(
+                    FilterExpression="user_id = :u AND tenant_id = :t",
+                    ExpressionAttributeValues={
+                        ":u": user_id,
+                        ":t": tenant_id
+                    }
+                )
+                
+                if not user_roles_response.get('Items'):
+                    # Buscar rol admin para este tenant
+                    admin_roles = roles_table.scan(
+                        FilterExpression="tenant_id = :t AND role_name = :r",
+                        ExpressionAttributeValues={
+                            ':t': tenant_id,
+                            ':r': 'admin'
+                        }
+                    ).get('Items', [])
+                    
+                    if admin_roles:
+                        admin_role_id = admin_roles[0]['role_id']
+                        timestamp = datetime.now().isoformat()
+                        
+                        # Asignar el rol al usuario
+                        user_role_id = str(uuid.uuid4())
+                        user_roles_table.put_item(Item={
+                            'id': user_role_id,
+                            'user_id': user_id,
+                            'role_id': admin_role_id,
+                            'tenant_id': tenant_id,
+                            'created_at': timestamp
+                        })
+                        
+                        logger.info(f"Rol admin asignado al usuario recién verificado: {user_id}")
+                    else:
+                        # Crear rol admin si no existe
+                        admin_role_id = str(uuid.uuid4())
+                        timestamp = datetime.now().isoformat()
+                        
+                        # Crear rol admin
+                        roles_table.put_item(Item={
+                            'role_id': admin_role_id,
+                            'tenant_id': tenant_id,
+                            'role_name': 'admin',
+                            'description': 'Administrador del sistema con acceso completo',
+                            'created_at': timestamp,
+                            'updated_at': timestamp,
+                            'created_by': 'system',
+                            'is_system_role': True,
+                            'status': 'active'
+                        })
+                        
+                        logger.info(f"Rol admin creado para tenant {tenant_id}")
+                        
+                        # Asignar permisos estándar al rol admin
+                        system_permissions = [
+                            'document:read', 'document:create', 'document:update', 'document:delete', 'document:download',
+                            'user:read', 'user:create', 'user:update', 'user:delete',
+                            'role:read', 'role:create', 'role:update', 'role:delete', 'role:assign',
+                            'tenant:read', 'tenant:update', 'tenant:configure',
+                            'alert:read', 'alert:manage', 'alert:rule',
+                            'stats:view', 'stats:advanced', 'stats:export',
+                            'audit:view', 'audit:export',
+                            'email:configure',
+                            'admin:full'
+                        ]
+                        
+                        for permission in system_permissions:
+                            permission_id = str(uuid.uuid4())
+                            role_permissions_table.put_item(Item={
+                                'id': permission_id,
+                                'role_id': admin_role_id,
+                                'permission': permission,
+                                'tenant_id': tenant_id,
+                                'created_at': timestamp
+                            })
+                        
+                        # Asignar el rol al usuario
+                        user_role_id = str(uuid.uuid4())
+                        user_roles_table.put_item(Item={
+                            'id': user_role_id,
+                            'user_id': user_id,
+                            'role_id': admin_role_id,
+                            'tenant_id': tenant_id,
+                            'created_at': timestamp
+                        })
+                        
+                        logger.info(f"Rol admin creado y asignado al usuario: {user_id}")
+                else:
+                    logger.info(f"El usuario {user_id} ya tiene roles asignados")
+                    
+            except Exception as e:
+                logger.error(f"Error asignando rol admin al usuario verificado: {str(e)}")
+                # Continuar el proceso aunque falle la asignación de rol
+            
+            # Enviar email de confirmación y verificar resultado
             email_sent = send_confirmation_email(email)
             if not email_sent:
                 logger.warning("No se pudo enviar el correo de confirmación, pero el usuario está verificado")
@@ -167,7 +366,7 @@ def lambda_handler(event, context):
             return {
                 'statusCode': 200,
                 'headers': {
-                    'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
+                    'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Credentials': 'false'
                 },
                 'body': json.dumps({
@@ -184,7 +383,7 @@ def lambda_handler(event, context):
                 return {
                     'statusCode': 200,
                     'headers': {
-                        'Access-Control-Allow-Origin': 'https://verify.docpilot.link',
+                        'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Credentials': 'false'
                     },
                     'body': json.dumps({

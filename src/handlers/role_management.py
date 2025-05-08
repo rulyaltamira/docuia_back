@@ -954,70 +954,164 @@ def remove_permission_from_role(event, context):
 
 @cors_wrapper
 def get_my_permissions(event, context):
-    """Obtiene todos los permisos del usuario actual"""
+    """Obtiene los permisos del usuario actual"""
     try:
         # Obtener user_id y tenant_id de los query params
         query_params = event.get('queryStringParameters', {}) or {}
         user_id = query_params.get('user_id')
         tenant_id = query_params.get('tenant_id')
         
-        if not user_id:
-            logger.error("Falta parámetro user_id")
-            return {
-                'statusCode': 400,
-                'headers': add_cors_headers({'Content-Type': 'application/json'}),
-                'body': json.dumps({'error': 'El parámetro user_id es obligatorio'})
-            }
+        if not user_id or not tenant_id:
+            logger.error("Faltan parámetros user_id o tenant_id")
+            return error_response(400, 'Los parámetros user_id y tenant_id son obligatorios')
         
-        if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
-            return {
-                'statusCode': 400,
-                'headers': add_cors_headers({'Content-Type': 'application/json'}),
-                'body': json.dumps({'error': 'El parámetro tenant_id es obligatorio'})
-            }
+        logger.info(f"Buscando permisos para user_id: {user_id}, tenant_id: {tenant_id}")
         
-        # Obtener todos los permisos del usuario
+        # 1. Obtener información del token JWT si está disponible
+        user_email = None
+        authorization = event.get('headers', {}).get('Authorization') or event.get('headers', {}).get('authorization')
+        if authorization and authorization.startswith('Bearer '):
+            try:
+                import base64
+                import json
+                
+                # Extraer y decodificar el token
+                token = authorization.split(' ')[1]
+                # El token JWT tiene 3 partes separadas por puntos
+                token_parts = token.split('.')
+                if len(token_parts) >= 2:
+                    # Decodificar la segunda parte (payload)
+                    # Puede ser necesario añadir padding
+                    payload = token_parts[1]
+                    payload += '=' * ((4 - len(payload) % 4) % 4)  # Añadir padding si es necesario
+                    decoded_payload = base64.b64decode(payload)
+                    token_data = json.loads(decoded_payload)
+                    
+                    # Extraer email y sub (ID de cognito)
+                    user_email = token_data.get('email')
+                    cognito_id = token_data.get('sub')
+                    
+                    logger.info(f"Información extraída del token: email={user_email}, cognito_id={cognito_id}")
+                    
+                    # Si el ID de usuario coincide con el sub del token, estamos en el caso de Cognito ID
+                    if user_id == cognito_id:
+                        logger.info(f"El user_id coincide con el ID de Cognito del token")
+            except Exception as e:
+                logger.warning(f"Error decodificando token JWT: {str(e)}")
+        
+        # 2. Verificar si el user_id es un ID de Cognito en formato email
+        user_response = users_table.scan(
+            FilterExpression="cognito_id = :c",
+            ExpressionAttributeValues={
+                ':c': user_id
+            }
+        )
+        
+        user_items = user_response.get('Items', [])
+        
+        # 3. Si no se encontró y tenemos email del token, buscar por email
+        if not user_items and user_email:
+            logger.info(f"Buscando usuario por email: {user_email}")
+            user_response = users_table.scan(
+                FilterExpression="email = :e",
+                ExpressionAttributeValues={
+                    ':e': user_email
+                }
+            )
+            user_items = user_response.get('Items', [])
+        
+        # 4. Si aún no se encuentra, buscar por coincidencia parcial en cognito_id
+        if not user_items:
+            logger.info(f"Buscando usuario por coincidencia parcial en cognito_id")
+            user_response = users_table.scan(
+                FilterExpression="contains(cognito_id, :c)",
+                ExpressionAttributeValues={
+                    ':c': user_id.split('-')[0] if '-' in user_id else user_id
+                }
+            )
+            user_items = user_response.get('Items', [])
+        
+        if user_items:
+            # Si se encuentra un usuario por alguno de los métodos, usar su user_id real
+            user = user_items[0]
+            real_user_id = user.get('user_id')
+            real_tenant_id = user.get('tenant_id')
+            
+            logger.info(f"Usuario encontrado, user_id real: {real_user_id}, tenant_id real: {real_tenant_id}")
+            
+            # Verificar que el tenant_id proporcionado coincida con el del usuario
+            if tenant_id != real_tenant_id and tenant_id != 'default':
+                logger.warning(f"tenant_id proporcionado {tenant_id} no coincide con el del usuario {real_tenant_id}")
+                tenant_id = real_tenant_id
+            
+            user_id = real_user_id
+        else:
+            # Si no se encuentra el usuario, intentar crear uno temporal basado en el email
+            if user_email:
+                logger.warning(f"Usuario no encontrado en DynamoDB. Creando usuario temporal basado en email: {user_email}")
+                # Generar respuesta para usuario con privilegios mínimos
+                return success_response({
+                    'user_id': user_id,
+                    'tenant_id': tenant_id,
+                    'permissions': [],
+                    'roles': [],
+                    'is_admin': False,
+                    'message': 'Usuario temporal con privilegios mínimos'
+                })
+            else:
+                # 5. Intentar buscar directamente por user_id
+                user_response = users_table.get_item(Key={'user_id': user_id})
+                if 'Item' in user_response:
+                    user = user_response['Item']
+                    real_tenant_id = user.get('tenant_id')
+                    
+                    logger.info(f"Usuario encontrado por user_id directo, tenant_id real: {real_tenant_id}")
+                    
+                    # Verificar que el tenant_id proporcionado coincida con el del usuario
+                    if tenant_id != real_tenant_id and tenant_id != 'default':
+                        logger.warning(f"tenant_id proporcionado {tenant_id} no coincide con el del usuario {real_tenant_id}")
+                        tenant_id = real_tenant_id
+                else:
+                    logger.error(f"No se encontró usuario con ID: {user_id}")
+                    return success_response({
+                        'user_id': user_id,
+                        'tenant_id': tenant_id,
+                        'permissions': [],
+                        'roles': [],
+                        'is_admin': False,
+                        'message': 'Usuario no encontrado en sistema'
+                    })
+        
+        # Obtener roles y permisos del usuario
+        user_roles = get_user_roles(user_id, tenant_id)
         permissions = get_user_permissions(user_id, tenant_id)
         
-        # Obtener roles del usuario
-        user_roles_data = get_user_roles(user_id, tenant_id)
-        
-        # Obtener detalles de los roles
-        roles = []
-        for user_role in user_roles_data:
-            role_id = user_role.get('role_id')
-            role_response = roles_table.get_item(Key={'role_id': role_id})
+        # Verificar si el usuario es admin en la tabla de usuarios
+        is_admin = False
+        user_response = users_table.get_item(Key={'user_id': user_id})
+        if 'Item' in user_response:
+            is_admin = user_response['Item'].get('role') == 'admin'
             
-            if 'Item' in role_response:
-                role = role_response['Item']
-                roles.append({
-                    'role_id': role_id,
-                    'role_name': role.get('role_name'),
-                    'description': role.get('description')
-                })
+        # Si no hay roles específicos pero el campo role es 'admin', considerarlo admin
+        if not user_roles and is_admin:
+            logger.info(f"Usuario {user_id} es admin según el campo role")
+            permissions = ['*']  # Admin tiene todos los permisos
+            user_roles = ['legacy_admin']  # Añadir rol ficticio para indicar que es admin
         
-        # Verificar si tiene permiso de administrador
-        has_admin_permission = 'admin:full' in permissions or '*' in permissions
+        logger.info(f"Permisos para usuario {user_id} en tenant {tenant_id}: {permissions}")
+        logger.info(f"Roles para usuario {user_id} en tenant {tenant_id}: {user_roles}")
+        logger.info(f"Es admin: {is_admin}")
         
-        logger.info(f"Recuperados {len(permissions)} permisos para usuario {user_id}")
-        
-        return {
-            'statusCode': 200,
-            'headers': add_cors_headers({'Content-Type': 'application/json'}),
-            'body': json.dumps({
-                'user_id': user_id,
-                'tenant_id': tenant_id,
-                'permissions': permissions,
-                'roles': roles,
-                'is_admin': has_admin_permission
-            })
+        response_data = {
+            'user_id': user_id,
+            'tenant_id': tenant_id,
+            'permissions': permissions,
+            'roles': user_roles if isinstance(user_roles, list) else [role.get('role_id', 'unknown') for role in user_roles],
+            'is_admin': is_admin
         }
+        
+        return success_response(response_data)
         
     except Exception as e:
-        logger.error(f"Error obteniendo permisos de usuario: {str(e)}")
-        return {
-            'statusCode': 500,
-            'headers': add_cors_headers({'Content-Type': 'application/json'}),
-            'body': json.dumps({'error': str(e)})
-        }
+        logger.error(f"Error obteniendo permisos: {str(e)}")
+        return error_response(500, f"Error interno: {str(e)}")

@@ -4,12 +4,14 @@ import argparse
 import sys
 import os
 from datetime import datetime
+import uuid
 
 # Configuración de servicios y entorno
 STAGE = os.environ.get('STAGE', 'dev')
 REGION = os.environ.get('AWS_REGION', 'eu-west-1')
 SERVICE_NAME = os.environ.get('SERVICE_NAME', 'docpilot-newsystem-v2')
 FUNCTION_NAME = f"{SERVICE_NAME}-{STAGE}-tenantOnboarding"
+VERIFY_FUNCTION_NAME = f"{SERVICE_NAME}-{STAGE}-verifyEmail"
 USERS_TABLE = f"{SERVICE_NAME}-users-{STAGE}"
 TENANTS_TABLE = f"{SERVICE_NAME}-tenants-{STAGE}"
 VERIFICATION_URL = os.environ.get('VERIFICATION_BASE_URL', 'https://verify.docpilot.link')
@@ -44,6 +46,7 @@ def create_tenant_via_lambda(tenant_name, admin_email, plan="free"):
     }
     
     print(f"Invocando Lambda directamente...")
+    print(f"Evento: {json.dumps(event, indent=2)}")
     
     # Configurar cliente Lambda
     lambda_client = boto3.client('lambda', region_name=REGION)
@@ -59,48 +62,64 @@ def create_tenant_via_lambda(tenant_name, admin_email, plan="free"):
         # Procesar respuesta
         status_code = response['StatusCode']
         payload_bytes = response['Payload'].read()
-        payload = json.loads(payload_bytes.decode('utf-8'))
         
         print(f"Status Code: {status_code}")
+        print(f"Respuesta cruda: {payload_bytes.decode('utf-8')}")
+        
+        try:
+            payload = json.loads(payload_bytes.decode('utf-8'))
+            print(f"Respuesta JSON: {json.dumps(payload, indent=2)}")
+        except json.JSONDecodeError:
+            print(f"⚠️ La respuesta no es JSON válido: {payload_bytes.decode('utf-8')}")
+            return None
         
         if status_code == 200:
             # La respuesta Lambda fue exitosa, ahora analizar el statusCode interno
             if payload.get('statusCode') in [200, 201]:
                 # Extraer el body (que es un string JSON) y parsearlo
-                body = json.loads(payload.get('body', '{}'))
-                tenant_id = body.get('tenant_id')
-                
-                if tenant_id:
-                    print(f"\n✅ Tenant creado exitosamente:")
-                    print(f"   ID: {tenant_id}")
-                    print(f"   Nombre: {tenant_name}")
-                    print(f"   Admin: {admin_email}")
-                    print(f"   Plan: {plan}")
+                try:
+                    body = json.loads(payload.get('body', '{}'))
+                    tenant_id = body.get('tenant_id')
                     
-                    # Mostrar recursos creados
-                    resources = body.get('resources_created', [])
-                    if resources:
-                        print("\nRecursos creados:")
-                        for resource in resources:
-                            print(f"   • {resource}")
-                    
-                    # Información sobre verificación por correo
-                    print("\n📧 IMPORTANTE: Se ha enviado un correo de verificación a la dirección de administrador.")
-                    print("   ⚠️  El usuario debe verificar su correo electrónico para activar su cuenta.")
-                    print("   ℹ️  El enlace de verificación expirará en 3 días.")
-                    print(f"   🔗 El enlace de verificación apuntará a: {VERIFICATION_URL}?token=XXX&tenant={tenant_id}")
-                    
-                    return tenant_id
-                else:
-                    print(f"\n❌ Error: No se encontró tenant_id en la respuesta")
-                    print(f"Respuesta: {json.dumps(body, indent=2)}")
+                    if tenant_id:
+                        print(f"\n✅ Tenant creado exitosamente:")
+                        print(f"   ID: {tenant_id}")
+                        print(f"   Nombre: {tenant_name}")
+                        print(f"   Admin: {admin_email}")
+                        print(f"   Plan: {plan}")
+                        
+                        # Mostrar recursos creados
+                        resources = body.get('resources_created', [])
+                        if resources:
+                            print("\nRecursos creados:")
+                            for resource in resources:
+                                print(f"   • {resource}")
+                        
+                        # Información sobre verificación por correo
+                        print("\n📧 IMPORTANTE: Se ha enviado un correo de verificación a la dirección de administrador.")
+                        print("   ⚠️  El usuario debe verificar su correo electrónico para activar su cuenta.")
+                        print("   ℹ️  El enlace de verificación expirará en 3 días.")
+                        print(f"   🔗 El enlace de verificación apuntará a: {VERIFICATION_URL}?token=XXX&tenant={tenant_id}")
+                        
+                        return tenant_id
+                    else:
+                        print(f"\n❌ Error: No se encontró tenant_id en la respuesta")
+                        print(f"Respuesta: {json.dumps(body, indent=2)}")
+                except json.JSONDecodeError:
+                    print(f"\n❌ Error: No se pudo decodificar el body: {payload.get('body', '{}')}")
+                    return None
             else:
-                error_msg = json.loads(payload.get('body', '{}')).get('error', 'Error desconocido')
-                print(f"\n❌ Error: {error_msg}")
-                print(f"StatusCode: {payload.get('statusCode')}")
+                try:
+                    error_body = json.loads(payload.get('body', '{}'))
+                    error_msg = error_body.get('error', 'Error desconocido')
+                    print(f"\n❌ Error: {error_msg}")
+                    print(f"StatusCode: {payload.get('statusCode')}")
+                    print(f"Body completo: {json.dumps(error_body, indent=2)}")
+                except json.JSONDecodeError:
+                    print(f"\n❌ Error: No se pudo decodificar el body de error: {payload.get('body', '{}')}")
                 
                 # Si es un error de correo no corporativo, mostrar información adicional
-                if "corporativo" in error_msg.lower():
+                if isinstance(error_msg, str) and "corporativo" in error_msg.lower():
                     print("\n⚠️ Solo se permiten correos corporativos (no personales).")
                     print("   Los siguientes dominios no están permitidos:")
                     print("   - Gmail, Hotmail, Outlook, Yahoo, AOL")
@@ -112,6 +131,8 @@ def create_tenant_via_lambda(tenant_name, admin_email, plan="free"):
             
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
     return None
 
@@ -318,6 +339,150 @@ def fix_api_gateway_cors():
         print(f"❌ Error configurando CORS: {str(e)}")
         return False
 
+def verify_token(token, tenant_id):
+    """
+    Verifica un token de correo electrónico invocando directamente la función Lambda
+    """
+    print(f"Verificando token para tenant: {tenant_id}")
+    print(f"Usando función Lambda: {VERIFY_FUNCTION_NAME}")
+    
+    # Crear el evento para Lambda
+    event = {
+        "httpMethod": "GET",
+        "path": "/tenants/verify-email",
+        "queryStringParameters": {
+            "token": token,
+            "tenant": tenant_id
+        }
+    }
+    
+    print(f"Invocando Lambda de verificación directamente...")
+    
+    # Configurar cliente Lambda
+    lambda_client = boto3.client('lambda', region_name=REGION)
+    
+    # Invocar Lambda
+    try:
+        response = lambda_client.invoke(
+            FunctionName=VERIFY_FUNCTION_NAME,
+            InvocationType='RequestResponse',
+            Payload=json.dumps(event)
+        )
+        
+        # Procesar respuesta
+        status_code = response['StatusCode']
+        payload_bytes = response['Payload'].read()
+        
+        print(f"Status Code: {status_code}")
+        print(f"Respuesta: {payload_bytes.decode('utf-8')}")
+        
+        try:
+            payload = json.loads(payload_bytes.decode('utf-8'))
+            
+            if 'statusCode' in payload:
+                if payload['statusCode'] in [200, 302]:
+                    print("\n✅ Verificación exitosa")
+                    if 'headers' in payload and 'Location' in payload['headers']:
+                        print(f"Redirección a: {payload['headers']['Location']}")
+                    return True
+                else:
+                    print(f"\n❌ Error en la verificación: Status {payload['statusCode']}")
+                    if 'body' in payload:
+                        try:
+                            body = json.loads(payload['body'])
+                            print(f"Mensaje: {body.get('message', 'No hay mensaje')}")
+                        except:
+                            print(f"Body: {payload['body']}")
+            else:
+                print("\n❌ Formato de respuesta no esperado")
+                print(f"Payload: {json.dumps(payload, indent=2)}")
+                
+        except json.JSONDecodeError:
+            print(f"\n❌ No se pudo decodificar la respuesta: {payload_bytes.decode('utf-8')}")
+            
+    except Exception as e:
+        print(f"\n❌ Error en la invocación: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    return False
+
+def assign_user_role(user_id, tenant_id, role_name="admin"):
+    """
+    Asigna manualmente un rol a un usuario
+    """
+    print(f"Asignando rol {role_name} al usuario {user_id} en tenant {tenant_id}")
+    
+    # Configurar clientes
+    dynamodb = boto3.resource('dynamodb', region_name=REGION)
+    roles_table = dynamodb.Table(f"{SERVICE_NAME}-roles-{STAGE}")
+    user_roles_table = dynamodb.Table(f"{SERVICE_NAME}-user-roles-{STAGE}")
+    
+    try:
+        # Buscar el rol por nombre
+        role_response = roles_table.scan(
+            FilterExpression="tenant_id = :t AND role_name = :r",
+            ExpressionAttributeValues={
+                ':t': tenant_id,
+                ':r': role_name
+            }
+        )
+        
+        roles = role_response.get('Items', [])
+        
+        if not roles:
+            print(f"❌ No se encontró el rol {role_name} para el tenant {tenant_id}")
+            print("Roles disponibles:")
+            all_roles = roles_table.scan(
+                FilterExpression="tenant_id = :t",
+                ExpressionAttributeValues={':t': tenant_id}
+            ).get('Items', [])
+            
+            if all_roles:
+                for role in all_roles:
+                    print(f" - {role.get('role_name', 'unknown')}: {role.get('role_id', 'unknown')}")
+            else:
+                print("No hay roles definidos para este tenant")
+            return False
+        
+        role_id = roles[0]['role_id']
+        print(f"Rol encontrado: {role_id}")
+        
+        # Verificar si ya tiene asignado el rol
+        existing_assignments = user_roles_table.scan(
+            FilterExpression="user_id = :u AND role_id = :r AND tenant_id = :t",
+            ExpressionAttributeValues={
+                ':u': user_id,
+                ':r': role_id,
+                ':t': tenant_id
+            }
+        ).get('Items', [])
+        
+        if existing_assignments:
+            print(f"✅ El usuario ya tiene asignado el rol {role_name}")
+            return True
+        
+        # Asignar el rol
+        user_role_id = str(uuid.uuid4())
+        timestamp = datetime.now().isoformat()
+        
+        user_roles_table.put_item(Item={
+            'id': user_role_id,
+            'user_id': user_id,
+            'role_id': role_id,
+            'tenant_id': tenant_id,
+            'created_at': timestamp
+        })
+        
+        print(f"✅ Rol {role_name} asignado correctamente al usuario {user_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error asignando rol: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def main():
     # Configurar argumentos de línea de comandos
     parser = argparse.ArgumentParser(description='Crear un tenant llamando directamente a Lambda.')
@@ -329,14 +494,18 @@ def main():
     parser.add_argument('--fix-cors', action='store_true', help='Configurar CORS para API Gateway')
     parser.add_argument('--stage', help='Etapa (dev, test, prod)')
     parser.add_argument('--region', help='Región AWS')
+    parser.add_argument('--verify-token', help='Verifica un token de correo electrónico')
+    parser.add_argument('--assign-role', help='Asigna un rol a un usuario (ID de usuario)')
+    parser.add_argument('--role-name', default='admin', help='Nombre del rol a asignar (default: admin)')
     
     args = parser.parse_args()
     
     # Actualizar variables globales si se proporcionan
-    global STAGE, REGION, FUNCTION_NAME, USERS_TABLE, TENANTS_TABLE
+    global STAGE, REGION, FUNCTION_NAME, USERS_TABLE, TENANTS_TABLE, VERIFY_FUNCTION_NAME
     if args.stage:
         STAGE = args.stage
         FUNCTION_NAME = f"{SERVICE_NAME}-{STAGE}-tenantOnboarding"
+        VERIFY_FUNCTION_NAME = f"{SERVICE_NAME}-{STAGE}-verifyEmail"
         USERS_TABLE = f"{SERVICE_NAME}-users-{STAGE}"
         TENANTS_TABLE = f"{SERVICE_NAME}-tenants-{STAGE}"
     
@@ -345,7 +514,17 @@ def main():
     
     print(f"Usando entorno: {STAGE}, región: {REGION}")
     
-    if args.check:
+    if args.assign_role:
+        # Asignar rol
+        if not args.name:
+            parser.error("El argumento --name (tenant_id) es obligatorio para asignar un rol")
+        assign_user_role(args.assign_role, args.name, args.role_name)
+    elif args.verify_token:
+        # Verificar token
+        if not args.name:
+            parser.error("El argumento --name (tenant_id) es obligatorio para verificar un token")
+        verify_token(args.verify_token, args.name)
+    elif args.check:
         # Comprobar verificación de correo
         print(f"Comprobando estado de verificación para email {args.email}...")
         check_email_verification(args.name, args.email)

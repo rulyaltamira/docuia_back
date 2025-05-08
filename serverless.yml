@@ -931,14 +931,18 @@ functions:
           - dynamodb:GetItem
           - dynamodb:UpdateItem
           - dynamodb:Scan
+          - dynamodb:PutItem
         Resource: 
           - !GetAtt UsersTable.Arn
+          - !GetAtt RolesTable.Arn
+          - !GetAtt UserRolesTable.Arn
+          - !GetAtt RolePermissionsTable.Arn
     events:
       - http:
           path: tenants/verify-email
           method: get
           cors:
-            origin: 'https://verify.docpilot.link'
+            origin: '*'
             headers:
               - Content-Type
               - X-Amz-Date
