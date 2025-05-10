@@ -1,171 +1,221 @@
-#!/usr/bin/env python
-# coding: utf-8
+#!/usr/bin/env python3
+# scripts/cleanup.py
+# Script para limpiar registros de prueba de DynamoDB, S3 y Cognito
 
 import boto3
-import logging
 import argparse
-from botocore.exceptions import ClientError
+import logging
+import sys
+import yaml
+import os
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Configuración de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
 
-# Configurar clientes AWS
-dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
-s3 = boto3.client('s3', region_name='eu-west-1')
-cognito = boto3.client('cognito-idp', region_name='eu-west-1')
-
-# Configuración de recursos
+# Configuración por defecto
+REGION = 'eu-west-1'
 STAGE = 'dev'
-SERVICE = 'docpilot-newsystem-v2'
-USER_POOL_ID = 'eu-west-1_uJTvs1HT7'
+SERVICE_NAME = 'docpilot-newsystem-v2'
 
-# Nombres de tablas DynamoDB
-TABLES = [
-    f"{SERVICE}-contracts-{STAGE}",
-    f"{SERVICE}-tenants-{STAGE}",
-    f"{SERVICE}-users-{STAGE}",
-    f"{SERVICE}-alerts-{STAGE}",
-    f"{SERVICE}-alert-rules-{STAGE}",
-    f"{SERVICE}-alert-preferences-{STAGE}",
-    f"{SERVICE}-roles-{STAGE}",
-    f"{SERVICE}-permissions-{STAGE}",
-    f"{SERVICE}-user-roles-{STAGE}",
-    f"{SERVICE}-role-permissions-{STAGE}",
-    f"{SERVICE}-statistics-{STAGE}",
-    f"{SERVICE}-reports-{STAGE}",
-    f"{SERVICE}-report-schedules-{STAGE}"
-]
-
-# Nombres de buckets S3
-BUCKETS = [
-    f"{SERVICE}-main-{STAGE}",
-    f"{SERVICE}-ses-{STAGE}",
-    f"{SERVICE}-audit-{STAGE}"
-]
-
-def confirm_action(message):
-    """Solicita confirmación al usuario"""
-    confirm = input(f"{message} (s/n): ").lower()
-    return confirm in ['s', 'si', 'yes', 'y']
-
-def delete_all_s3_objects(bucket_name):
-    """Elimina todos los objetos de un bucket S3"""
+def get_service_config():
+    """Obtiene la configuración del servicio desde serverless.yml"""
     try:
-        logger.info(f"Eliminando objetos del bucket: {bucket_name}")
-        
-        # Listar todos los objetos
-        paginator = s3.get_paginator('list_objects_v2')
-        total_objects = 0
-        
-        for page in paginator.paginate(Bucket=bucket_name):
-            if 'Contents' in page:
-                objects = [{'Key': obj['Key']} for obj in page['Contents']]
-                if objects:
-                    s3.delete_objects(
-                        Bucket=bucket_name,
-                        Delete={'Objects': objects, 'Quiet': True}
-                    )
-                    total_objects += len(objects)
-        
-        logger.info(f"Se eliminaron {total_objects} objetos del bucket {bucket_name}")
-        return True
+        with open('serverless.yml', 'r') as file:
+            config = yaml.safe_load(file)
+            return config.get('service', SERVICE_NAME)
     except Exception as e:
-        logger.error(f"Error eliminando objetos del bucket {bucket_name}: {str(e)}")
-        return False
+        logger.warning(f"No se pudo leer serverless.yml: {str(e)}")
+        return SERVICE_NAME
 
-def delete_all_cognito_users():
-    """Elimina todos los usuarios del User Pool"""
-    try:
-        logger.info(f"Eliminando usuarios del User Pool: {USER_POOL_ID}")
+def clean_dynamodb_tenant(tenant_id, tables, region=REGION, stage=STAGE):
+    """Limpia los registros relacionados con un tenant específico en las tablas DynamoDB"""
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    service_name = get_service_config()
+    
+    logger.info(f"Eliminando registros del tenant '{tenant_id}' en DynamoDB...")
+    
+    for table_name in tables:
+        full_table_name = f"{service_name}-{table_name}-{stage}"
+        table = dynamodb.Table(full_table_name)
         
-        # Listar todos los usuarios
-        paginator = cognito.get_paginator('list_users')
-        total_users = 0
-        
-        for page in paginator.paginate(UserPoolId=USER_POOL_ID):
-            for user in page['Users']:
-                try:
-                    cognito.admin_delete_user(
-                        UserPoolId=USER_POOL_ID,
-                        Username=user['Username']
-                    )
-                    total_users += 1
-                except Exception as e:
-                    logger.error(f"Error eliminando usuario {user['Username']}: {str(e)}")
-        
-        logger.info(f"Se eliminaron {total_users} usuarios de Cognito")
-        return True
-    except Exception as e:
-        logger.error(f"Error eliminando usuarios de Cognito: {str(e)}")
-        return False
-
-def delete_all_dynamodb_items(table_name):
-    """Elimina todos los items de una tabla DynamoDB"""
-    try:
-        table = dynamodb.Table(table_name)
-        logger.info(f"Eliminando items de la tabla: {table_name}")
-        
-        # Obtener la clave primaria de la tabla
-        key_schema = table.key_schema
-        hash_key = next(key['AttributeName'] for key in key_schema if key['KeyType'] == 'HASH')
-        range_key = next((key['AttributeName'] for key in key_schema if key['KeyType'] == 'RANGE'), None)
-        
-        # Escanear y eliminar todos los items
-        total_items = 0
-        scan_kwargs = {}
-        done = False
-        
-        while not done:
-            response = table.scan(**scan_kwargs)
-            items = response.get('Items', [])
-            
-            for item in items:
-                key = {hash_key: item[hash_key]}
-                if range_key:
-                    key[range_key] = item[range_key]
+        try:
+            # Diferentes enfoques según la estructura de la tabla
+            if table_name == 'tenants':
+                # Para la tabla tenants, eliminamos directamente por tenant_id
+                response = table.delete_item(Key={'tenant_id': tenant_id})
+                logger.info(f"Eliminado tenant {tenant_id} de la tabla {full_table_name}")
+            elif table_name in ['users', 'roles', 'alerts', 'alert-rules', 'alert-preferences']:
+                # Para tablas con un índice directo pero que contienen tenant_id como atributo
+                # Primero escaneamos para encontrar elementos relacionados
+                scan_kwargs = {
+                    'FilterExpression': 'tenant_id = :tid',
+                    'ExpressionAttributeValues': {':tid': tenant_id}
+                }
                 
-                table.delete_item(Key=key)
-                total_items += 1
-            
-            done = 'LastEvaluatedKey' not in response
-            if not done:
-                scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                done = False
+                count = 0
+                while not done:
+                    response = table.scan(**scan_kwargs)
+                    items = response.get('Items', [])
+                    
+                    # Eliminar cada elemento encontrado
+                    for item in items:
+                        # Determinar la clave primaria según la tabla
+                        if table_name == 'users':
+                            key = {'user_id': item['user_id']}
+                        elif table_name == 'roles':
+                            key = {'role_id': item['role_id']}
+                        elif table_name == 'alerts':
+                            key = {'alert_id': item['alert_id']}
+                        elif table_name == 'alert-rules':
+                            key = {'rule_id': item['rule_id']}
+                        elif table_name == 'alert-preferences':
+                            key = {'preference_id': item['preference_id']}
+                        
+                        table.delete_item(Key=key)
+                        count += 1
+                    
+                    # Verificar si hay más elementos para escanear
+                    if 'LastEvaluatedKey' in response:
+                        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    else:
+                        done = True
+                
+                logger.info(f"Eliminados {count} elementos de {tenant_id} en tabla {full_table_name}")
+            elif table_name in ['user-roles', 'role-permissions']:
+                # Para tablas de relación donde tenant_id es un atributo
+                scan_kwargs = {
+                    'FilterExpression': 'tenant_id = :tid',
+                    'ExpressionAttributeValues': {':tid': tenant_id}
+                }
+                
+                done = False
+                count = 0
+                while not done:
+                    response = table.scan(**scan_kwargs)
+                    items = response.get('Items', [])
+                    
+                    # Eliminar cada elemento encontrado
+                    for item in items:
+                        table.delete_item(Key={'id': item['id']})
+                        count += 1
+                    
+                    # Verificar si hay más elementos para escanear
+                    if 'LastEvaluatedKey' in response:
+                        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    else:
+                        done = True
+                
+                logger.info(f"Eliminados {count} elementos de {tenant_id} en tabla {full_table_name}")
+        except Exception as e:
+            logger.error(f"Error limpiando tabla {full_table_name}: {str(e)}")
+
+def clean_s3_tenant(tenant_id, buckets, region=REGION, stage=STAGE):
+    """Elimina los objetos de S3 relacionados con un tenant específico"""
+    s3 = boto3.resource('s3', region_name=region)
+    service_name = get_service_config()
+    
+    logger.info(f"Eliminando objetos del tenant '{tenant_id}' en S3...")
+    
+    for bucket_name in buckets:
+        full_bucket_name = f"{service_name}-{bucket_name}-{stage}"
         
-        logger.info(f"Se eliminaron {total_items} items de la tabla {table_name}")
-        return True
+        try:
+            bucket = s3.Bucket(full_bucket_name)
+            
+            # Eliminar objetos en la carpeta del tenant
+            prefix = f"tenants/{tenant_id}/"
+            count = 0
+            
+            for obj in bucket.objects.filter(Prefix=prefix):
+                obj.delete()
+                count += 1
+            
+            logger.info(f"Eliminados {count} objetos de {prefix} en bucket {full_bucket_name}")
+            
+        except Exception as e:
+            logger.error(f"Error limpiando bucket {full_bucket_name}: {str(e)}")
+
+def clean_cognito_users(emails, region=REGION, stage=STAGE):
+    """Elimina usuarios de Cognito por email"""
+    cognito = boto3.client('cognito-idp', region_name=region)
+    service_name = get_service_config()
+    
+    # Obtener el ID del user pool
+    try:
+        response = cognito.list_user_pools(MaxResults=60)
+        user_pools = response.get('UserPools', [])
+        
+        user_pool_id = None
+        for pool in user_pools:
+            if pool['Name'].startswith(f"{service_name}-user-pool-{stage}"):
+                user_pool_id = pool['Id']
+                break
+        
+        if not user_pool_id:
+            logger.error(f"No se encontró el User Pool para {service_name}-{stage}")
+            return
+        
+        logger.info(f"Eliminando usuarios de Cognito en User Pool {user_pool_id}...")
+        
+        for email in emails:
+            try:
+                # Verificar si el usuario existe
+                try:
+                    user_info = cognito.admin_get_user(
+                        UserPoolId=user_pool_id,
+                        Username=email
+                    )
+                    
+                    # Eliminar el usuario
+                    cognito.admin_delete_user(
+                        UserPoolId=user_pool_id,
+                        Username=email
+                    )
+                    
+                    logger.info(f"Usuario {email} eliminado de Cognito")
+                except cognito.exceptions.UserNotFoundException:
+                    logger.info(f"Usuario {email} no encontrado en Cognito")
+                    
+            except Exception as e:
+                logger.error(f"Error eliminando usuario {email} de Cognito: {str(e)}")
+        
     except Exception as e:
-        logger.error(f"Error eliminando items de la tabla {table_name}: {str(e)}")
-        return False
+        logger.error(f"Error obteniendo User Pools: {str(e)}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Limpia todos los recursos del backend')
-    parser.add_argument('--force', '-f', action='store_true', help='No pedir confirmación')
+    parser = argparse.ArgumentParser(description='Limpia datos de prueba de DynamoDB, S3 y Cognito')
+    parser.add_argument('--tenant', required=True, help='ID del tenant a eliminar')
+    parser.add_argument('--email', help='Email(s) del administrador a eliminar de Cognito', nargs='+')
+    parser.add_argument('--region', default=REGION, help=f'Región AWS (default: {REGION})')
+    parser.add_argument('--stage', default=STAGE, help=f'Etapa (default: {STAGE})')
+    
     args = parser.parse_args()
     
-    if not args.force:
-        if not confirm_action("⚠️ ADVERTENCIA: Este script eliminará TODOS los datos del backend. ¿Está seguro?"):
-            logger.info("Operación cancelada por el usuario")
-            return
+    # Tablas DynamoDB a limpiar
+    tables = [
+        'tenants', 
+        'users', 
+        'roles', 
+        'user-roles', 
+        'role-permissions',
+        'alerts',
+        'alert-rules',
+        'alert-preferences'
+    ]
     
-    # 1. Limpiar Cognito
-    logger.info("=== Limpiando Cognito User Pool ===")
-    delete_all_cognito_users()
+    # Buckets S3 a limpiar
+    buckets = ['main', 'ses', 'audit']
     
-    # 2. Limpiar S3
-    logger.info("\n=== Limpiando buckets S3 ===")
-    for bucket in BUCKETS:
-        delete_all_s3_objects(bucket)
+    # Ejecutar limpieza
+    clean_dynamodb_tenant(args.tenant, tables, args.region, args.stage)
+    clean_s3_tenant(args.tenant, buckets, args.region, args.stage)
     
-    # 3. Limpiar DynamoDB
-    logger.info("\n=== Limpiando tablas DynamoDB ===")
-    for table in TABLES:
-        delete_all_dynamodb_items(table)
+    if args.email:
+        clean_cognito_users(args.email, args.region, args.stage)
     
-    logger.info("\n✅ Limpieza completada")
+    logger.info("Limpieza completada")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

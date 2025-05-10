@@ -9,6 +9,7 @@ from decimal import Decimal
 
 # Importar módulos de utilidades
 from src.utils.s3_path_helper import decode_s3_key, extract_filename_from_key
+from src.utils.auth_utils import extract_tenant_id
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -59,16 +60,14 @@ def lambda_handler(event, context):
 def list_documents(event, context):
     """Lista documentos por tenant"""
     try:
-        # Obtener tenant_id de los query params
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        
+        # Obtener tenant_id desde token, query params o headers
+        tenant_id = extract_tenant_id(event)
         if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
+            logger.error("No se pudo determinar tenant_id")
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
+                'body': json.dumps({'error': 'No se pudo determinar tenant_id'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Listando documentos para tenant: {tenant_id}")
@@ -116,16 +115,14 @@ def get_document(event, context):
         # Obtener document_id de la ruta
         document_id = event['pathParameters']['id']
         
-        # Obtener tenant_id de los query params
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        
+        # Obtener tenant_id desde token, query params o headers
+        tenant_id = extract_tenant_id(event)
         if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
+            logger.error("No se pudo determinar tenant_id")
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
+                'body': json.dumps({'error': 'No se pudo determinar tenant_id'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Obteniendo documento: {document_id}, tenant: {tenant_id}")
@@ -438,16 +435,14 @@ def delete_document(event, context):
 def get_stats(event, context):
     """Obtiene estadísticas de documentos por tenant"""
     try:
-        # Obtener tenant_id de los query params
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        
+        # Obtener tenant_id desde token, query params o headers
+        tenant_id = extract_tenant_id(event)
         if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
+            logger.error("No se pudo determinar tenant_id")
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'}, cls=DecimalEncoder)
+                'body': json.dumps({'error': 'No se pudo determinar tenant_id'}, cls=DecimalEncoder)
             }
         
         logger.info(f"Obteniendo estadísticas para tenant: {tenant_id}")

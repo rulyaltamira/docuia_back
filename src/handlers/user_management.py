@@ -9,6 +9,7 @@ import secrets
 
 # Importar utilidades
 from src.utils.tenant_limits_validator import can_create_user, update_tenant_usage
+from src.utils.auth_utils import extract_tenant_id
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -322,17 +323,18 @@ def delete_user(event, context):
 def list_users(event, context):
     """Lista usuarios por tenant"""
     try:
-        # Obtener tenant_id de los query params
-        query_params = event.get('queryStringParameters', {}) or {}
-        tenant_id = query_params.get('tenant_id')
-        
+        # Obtener tenant_id desde token, query params o headers
+        tenant_id = extract_tenant_id(event)
         if not tenant_id:
-            logger.error("Falta parámetro tenant_id")
+            logger.error("No se pudo determinar tenant_id")
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Se requiere tenant_id como parámetro'})
+                'body': json.dumps({'error': 'No se pudo determinar tenant_id'})
             }
+        
+        # Obtener query params para filtros adicionales
+        query_params = event.get('queryStringParameters', {}) or {}
         
         # Filtrar por status si se proporciona
         status_filter = query_params.get('status', 'active')
