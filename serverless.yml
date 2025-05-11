@@ -14,10 +14,25 @@ provider:
     CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
     TENANTS_TABLE: ${self:service}-tenants-${self:provider.stage}
     USERS_TABLE: ${self:service}-users-${self:provider.stage}
+<<<<<<< Updated upstream
     # Referencias a los nombres de bucket que se generarán automáticamente
     MAIN_BUCKET: !Ref MainBucket
     SES_BUCKET: !Ref SESBucket
     AUDIT_BUCKET: !Ref AuditBucket
+=======
+    ALERTS_TABLE: ${self:service}-alerts-${self:provider.stage}
+    ALERT_RULES_TABLE: ${self:service}-alert-rules-${self:provider.stage}
+    ALERT_PREFERENCES_TABLE: ${self:service}-alert-preferences-${self:provider.stage}
+    ROLES_TABLE: ${self:service}-roles-${self:provider.stage}
+    PERMISSIONS_TABLE: ${self:service}-permissions-${self:provider.stage}
+    USER_ROLES_TABLE: ${self:service}-user-roles-${self:provider.stage}
+    ROLE_PERMISSIONS_TABLE: ${self:service}-role-permissions-${self:provider.stage}
+    STATISTICS_TABLE: ${self:service}-statistics-${self:provider.stage}
+    # Referencias a los nombres de bucket definidos explícitamente
+    MAIN_BUCKET: ${self:service}-main-${self:provider.stage}
+    SES_BUCKET: ${self:service}-ses-${self:provider.stage}
+    AUDIT_BUCKET: ${self:service}-audit-${self:provider.stage}
+>>>>>>> Stashed changes
     BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
   
   # Permisos IAM para todas las funciones
@@ -151,7 +166,26 @@ functions:
       - http:
           path: generate-url
           method: get
+<<<<<<< Updated upstream
           cors: true
+=======
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+>>>>>>> Stashed changes
 
   confirmUpload:
     handler: src/handlers/confirm_upload.lambda_handler
@@ -166,7 +200,27 @@ functions:
       - http:
           path: confirm-upload
           method: post
+<<<<<<< Updated upstream
           cors: true
+=======
+          integration: lambda-proxy 
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - x-tenant-id
+              - x-user-id
+            allowCredentials: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+>>>>>>> Stashed changes
 
   documentProcessor:
     handler: src/handlers/document_processor.lambda_handler
@@ -192,22 +246,129 @@ functions:
           path: tenants
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: tenants
           method: post
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: tenants/{tenant_id}
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: tenants/{tenant_id}
           method: put
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: tenants/{tenant_id}
           method: delete
           cors: true
+<<<<<<< Updated upstream
+=======
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: tenant-plans
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: tenants/{tenant_id}/usage
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: tenants/{tenant_id}/plan
+          method: put
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  tenantOnboarding:
+    handler: src/handlers/tenant_onboarding.lambda_handler
+    description: Proceso automatizado de onboarding para nuevos tenants
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/tenant_onboarding.py'
+        - 'src/utils/**'
+    environment:
+      USER_POOL_ID: !Ref CognitoUserPool
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - cognito-idp:AdminCreateUser
+          - cognito-idp:AdminGetUser
+          - cognito-idp:AdminUpdateUserAttributes
+        Resource: !GetAtt CognitoUserPool.Arn
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:Query
+          - dynamodb:Scan
+        Resource: 
+          - !GetAtt TenantsTable.Arn
+          - !GetAtt UsersTable.Arn
+          - !GetAtt ContractsTable.Arn
+          - !GetAtt AlertsTable.Arn
+          - !GetAtt AlertRulesTable.Arn
+          - !GetAtt AlertPreferencesTable.Arn
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+          - s3:PutObject
+          - s3:ListBucket
+          - s3:DeleteObject
+          - s3:PutObjectAcl
+        Resource: 
+          - arn:aws:s3:::${self:provider.environment.MAIN_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.SES_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.AUDIT_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.MAIN_BUCKET}
+          - arn:aws:s3:::${self:provider.environment.SES_BUCKET}
+          - arn:aws:s3:::${self:provider.environment.AUDIT_BUCKET}
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: 
+          - "arn:aws:ses:${self:provider.region}:*:identity/*"
+    events:
+      - http:
+          path: tenants/onboard
+          method: post
+          cors: true
+      - http:
+          path: tenants/onboard/admin
+          method: post
+          cors: true
+      - http:
+          path: tenants/onboard/status
+          method: get
+          cors: true
+>>>>>>> Stashed changes
 
   userManagement:
     handler: src/handlers/user_management.lambda_handler
@@ -235,22 +396,37 @@ functions:
           path: users
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: users
           method: post
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: users/{user_id}
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: users/{user_id}
           method: put
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: users/{user_id}
           method: delete
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
 
   documentManager:
     handler: src/handlers/document_manager.lambda_handler
@@ -266,26 +442,37 @@ functions:
           path: documents
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: documents/{id}
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: documents/{id}
           method: delete
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: documents/{id}/view
           method: get
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
       - http:
           path: documents/{id}/summary
           method: get
           cors: true
-      - http:
-          path: stats
-          method: get
-          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
 
   auditLogger:
     handler: src/handlers/audit_logger.lambda_handler
@@ -305,6 +492,625 @@ functions:
           path: audit/export
           method: post
           cors: true
+<<<<<<< Updated upstream
+=======
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
+      - http:
+          path: audit/logs
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
+  # Nuevas funciones para gestión de duplicados
+  checkDuplicates:
+    handler: src/handlers/check_duplicates.lambda_handler
+    description: Verifica si un documento es duplicado
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/check_duplicates.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: documents/check-duplicate 
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  handleDuplicate:
+    handler: src/handlers/check_duplicates.handle_duplicate
+    description: Gestiona qué hacer con un documento duplicado
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/check_duplicates.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: documents/handle-duplicate
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          
+  # Nueva función para configuración de dominios SES
+  sesConfigurator:
+    handler: src/handlers/email/ses_configurator.lambda_handler
+    description: Configura dominios SES para tenants
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/email/ses_configurator.py'
+        - 'src/utils/**'
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ses:VerifyDomainIdentity
+          - ses:VerifyDomainDkim
+          - ses:GetIdentityVerificationAttributes
+          - ses:GetIdentityDkimAttributes
+          - ses:DeleteIdentity
+          - ses:CreateReceiptRuleSet
+          - ses:CreateReceiptRule
+          - ses:DeleteReceiptRule
+          - ses:SetActiveReceiptRuleSet
+          - ses:ListReceiptRuleSets
+          - route53:ChangeResourceRecordSets
+        Resource: "*"
+    events:
+      - http:
+          path: email/domain
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: email/domain/status
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: email/receipt-rule
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: email/domains
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: email/domain/{tenant_id}/{domain}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  # Sistema de alertas
+  alertRuleManager:
+    handler: src/handlers/alerts/alert_rule_manager.lambda_handler
+    description: Gestión de reglas de alerta
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_rule_manager.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts/rules
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/rules
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/rules/{rule_id}
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/rules/{rule_id}
+          method: put
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/rules/{rule_id}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/rules/validate
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  alertNotifier:
+    handler: src/handlers/alerts/alert_notifier.lambda_handler
+    description: Gestiona la notificación, procesamiento y estado de las alertas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_notifier.py'
+        - 'src/utils/**'
+        - '!node_modules/**'
+        - '!**/__pycache__/**'
+    environment:
+      PYTHONPATH: "./:/opt/python"
+    events:
+      - http:
+          path: alerts/notify
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/preferences
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/preferences
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/process
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/{alert_id}
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/{alert_id}/status
+          method: put
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: alerts/summary
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:Query
+          - dynamodb:Scan
+        Resource:
+          - !GetAtt AlertsTable.Arn
+          - !GetAtt AlertRulesTable.Arn
+          - !GetAtt AlertPreferencesTable.Arn
+          - !GetAtt TenantsTable.Arn
+          - !GetAtt UsersTable.Arn
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: "*"
+
+  # Nueva función para leer alertas
+  alertReader:
+    handler: src/handlers/alerts/alert_reader.lambda_handler
+    description: Lee y lista alertas
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/alerts/alert_reader.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: alerts
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  scheduledAlertChecker:
+    handler: src/handlers/alerts/scheduled_alert_checker.lambda_handler
+    description: Verificador periódico de condiciones para alertas programadas
+    memorySize: 256
+    timeout: 180  # Más tiempo para revisar muchas reglas
+    package:
+      patterns:
+        - 'src/handlers/alerts/scheduled_alert_checker.py'
+        - 'src/utils/**'
+    environment:
+      ALERT_PROCESSOR_FUNCTION: !GetAtt AlertNotifierLambdaFunction.Arn
+    events:
+      # Ejecutar cada hora por defecto
+      - schedule: rate(1 hour)
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - lambda:InvokeFunction
+        Resource: !GetAtt AlertNotifierLambdaFunction.Arn
+      - Effect: Allow
+        Action:
+          - cloudwatch:PutMetricData
+        Resource: "*"
+
+  # Sistema de control de acceso granular
+  roleManagement:
+    handler: src/handlers/role_management.lambda_handler
+    description: Gestión de roles y permisos para control de acceso granular
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/role_management.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: roles
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: roles
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: roles/{role_id}
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: roles/{role_id}
+          method: put
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: roles/{role_id}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: permissions
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: permissions/system
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: user-roles
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: user-roles
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: user-roles/{id}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: role-permissions
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: role-permissions
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: role-permissions/{id}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: my-permissions
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  metricsCollector:
+    handler: src/handlers/stats/metrics_collector.lambda_handler
+    description: Recolecta métricas para estadísticas y análisis
+    memorySize: 512
+    timeout: 300
+    package:
+      patterns:
+        - 'src/handlers/stats/metrics_collector.py'
+        - 'src/utils/**'
+    events:
+      - schedule: rate(1 hour)
+      - http:
+          path: stats/collect
+          method: post
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
+  reportGenerator:
+    handler: src/handlers/stats/report_generator.lambda_handler
+    description: Genera informes de estadísticas
+    memorySize: 512
+    timeout: 300
+    package:
+      patterns:
+        - 'src/handlers/stats/report_generator.py'
+        - 'src/utils/**'
+    events:
+      - schedule: rate(1 day)
+      - http:
+          path: reports/generate
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: reports
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: reports/{report_id}
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: reports/schedule
+          method: post
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: reports/schedules
+          method: get
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+      - http:
+          path: reports/schedules/{schedule_id}
+          method: delete
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+
+  statsManager:
+    handler: src/handlers/stats/stats_manager.lambda_handler
+    description: Gestiona estadísticas y análisis
+    memorySize: 256
+    timeout: 30
+    package:
+      patterns:
+        - 'src/handlers/stats/stats_manager.py'
+        - 'src/utils/**'
+    events:
+      - http:
+          path: stats/summary
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/documents
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/users
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/alerts
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/processing
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/storage
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/critical-documents
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/trends
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+      - http:
+          path: stats/key-dates
+          method: get
+          cors: true
+          authorizer: 
+            type: COGNITO_USER_POOLS
+            authorizerId: 
+              Ref: ApiGatewayAuthorizer
+
+  verifyEmail:
+    handler: src/handlers/verify_email.lambda_handler
+    description: Verifica el email de un usuario
+    memorySize: 256
+    timeout: 20
+    package:
+      patterns:
+        - 'src/handlers/verify_email.py'
+        - 'src/utils/**'
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          - ses:GetIdentityVerificationAttributes
+        Resource: "*"
+      - Effect: Allow
+        Action:
+          - cognito-idp:AdminConfirmSignUp
+          - cognito-idp:AdminUpdateUserAttributes
+          - cognito-idp:AdminGetUser
+        Resource: 
+          - !GetAtt CognitoUserPool.Arn
+      - Effect: Allow
+        Action:
+          - dynamodb:GetItem
+          - dynamodb:UpdateItem
+          - dynamodb:Scan
+          - dynamodb:PutItem
+        Resource: 
+          - !GetAtt UsersTable.Arn
+          - !GetAtt RolesTable.Arn
+          - !GetAtt UserRolesTable.Arn
+          - !GetAtt RolePermissionsTable.Arn
+    events:
+      - http:
+          path: tenants/verify-email
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+              - Origin
+              - Accept
+              - Referer
+              - Access-Control-Request-Method
+              - Access-Control-Request-Headers
+            allowCredentials: false
+            maxAge: 3600
+>>>>>>> Stashed changes
 
 # Definición de recursos
 resources:
