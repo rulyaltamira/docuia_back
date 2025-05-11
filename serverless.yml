@@ -14,12 +14,6 @@ provider:
     CONTRACTS_TABLE: ${self:service}-contracts-${self:provider.stage}
     TENANTS_TABLE: ${self:service}-tenants-${self:provider.stage}
     USERS_TABLE: ${self:service}-users-${self:provider.stage}
-<<<<<<< Updated upstream
-    # Referencias a los nombres de bucket que se generarán automáticamente
-    MAIN_BUCKET: !Ref MainBucket
-    SES_BUCKET: !Ref SESBucket
-    AUDIT_BUCKET: !Ref AuditBucket
-=======
     ALERTS_TABLE: ${self:service}-alerts-${self:provider.stage}
     ALERT_RULES_TABLE: ${self:service}-alert-rules-${self:provider.stage}
     ALERT_PREFERENCES_TABLE: ${self:service}-alert-preferences-${self:provider.stage}
@@ -32,7 +26,6 @@ provider:
     MAIN_BUCKET: ${self:service}-main-${self:provider.stage}
     SES_BUCKET: ${self:service}-ses-${self:provider.stage}
     AUDIT_BUCKET: ${self:service}-audit-${self:provider.stage}
->>>>>>> Stashed changes
     BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
   
   # Permisos IAM para todas las funciones
@@ -166,9 +159,6 @@ functions:
       - http:
           path: generate-url
           method: get
-<<<<<<< Updated upstream
-          cors: true
-=======
           cors:
             origin: '*'
             headers:
@@ -185,7 +175,6 @@ functions:
           authorizer:
             type: COGNITO_USER_POOLS
             authorizerId: !Ref ApiGatewayAuthorizer
->>>>>>> Stashed changes
 
   confirmUpload:
     handler: src/handlers/confirm_upload.lambda_handler
@@ -200,9 +189,6 @@ functions:
       - http:
           path: confirm-upload
           method: post
-<<<<<<< Updated upstream
-          cors: true
-=======
           integration: lambda-proxy 
           cors:
             origin: '*'
@@ -220,7 +206,6 @@ functions:
           authorizer:
             type: COGNITO_USER_POOLS
             authorizerId: !Ref ApiGatewayAuthorizer
->>>>>>> Stashed changes
 
   documentProcessor:
     handler: src/handlers/document_processor.lambda_handler
@@ -274,8 +259,6 @@ functions:
           path: tenants/{tenant_id}
           method: delete
           cors: true
-<<<<<<< Updated upstream
-=======
           authorizer:
             type: COGNITO_USER_POOLS
             authorizerId: !Ref ApiGatewayAuthorizer
@@ -368,7 +351,6 @@ functions:
           path: tenants/onboard/status
           method: get
           cors: true
->>>>>>> Stashed changes
 
   userManagement:
     handler: src/handlers/user_management.lambda_handler
@@ -492,8 +474,6 @@ functions:
           path: audit/export
           method: post
           cors: true
-<<<<<<< Updated upstream
-=======
           authorizer: 
             type: COGNITO_USER_POOLS
             authorizerId: 
@@ -1110,7 +1090,6 @@ functions:
               - Access-Control-Request-Headers
             allowCredentials: false
             maxAge: 3600
->>>>>>> Stashed changes
 
 # Definición de recursos
 resources:
@@ -1229,6 +1208,17 @@ resources:
         ExplicitAuthFlows:
           - ADMIN_NO_SRP_AUTH
           - USER_PASSWORD_AUTH
+
+    ApiGatewayAuthorizer:
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: CognitoUserPoolAuthorizer
+        Type: COGNITO_USER_POOLS
+        IdentitySource: method.request.header.Authorization
+        RestApiId: 
+          Ref: ApiGatewayRestApi
+        ProviderARNs:
+          - Fn::GetAtt: [CognitoUserPool, Arn]
 
   # Outputs para uso en frontend o integración con otros sistemas
   Outputs:
