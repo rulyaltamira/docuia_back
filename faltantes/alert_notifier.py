@@ -20,11 +20,6 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from src.utils.cors_middleware import add_cors_headers
-from src.utils.auth_utils import get_tenant_id_or_error
-from src.utils.response_helpers import create_success_response, create_error_response
-from src.utils.validation_helpers import validate_required_fields
-from src.utils.db_helpers import get_item_or_404
-import decimal
 
 # Configuración de servicios
 logger = logging.getLogger()
@@ -37,45 +32,117 @@ alert_preferences_table = dynamodb.Table(os.environ.get('ALERT_PREFERENCES_TABLE
 users_table = dynamodb.Table(os.environ.get('USERS_TABLE'))
 tenants_table = dynamodb.Table(os.environ.get('TENANTS_TABLE'))
 
-# Añadir DecimalEncoder si no está globalmente disponible o importado de utils
-class DecimalEncoder(json.JSONEncoder):
-    def default(self, o): 
-        if isinstance(o, datetime):
-            return o.isoformat()
-        if isinstance(o, decimal.Decimal):
-            return float(o)
-        return super(DecimalEncoder, self).default(o)
-
 def lambda_handler(event, context):
-    function_name = context.function_name if hasattr(context, 'function_name') else 'local_test'
-    print(f"Evento recibido en {function_name}: {json.dumps(event)}")
-    
-    # TODO: Implementar la lógica del handler.
-    # Recuerda reemplazar este placeholder con el código de tu archivo en la carpeta 'faltantes' o desarrollar la nueva lógica.
-    
-    response_body = {
-        'message': f'Handler {function_name} ejecutado exitosamente (placeholder)',
-        'input_event': event
-    }
-    
-    return {
-        'statusCode': 200,
-        'body': json.dumps(response_body),
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*' # Ajustar según necesidad
+    """
+    Envía notificaciones de alerta a través de diferentes canales.
+    """
+    try:
+        logger.info(f"Evento recibido: {json.dumps(event)}")
+        
+        # Determinar tipo de invocación
+        if 'Records' in event:
+            # Invocación desde SQS
+            logger.info(f"Procesando {len(event['Records'])} mensajes de SQS")
+            processed_alerts = 0
+            
+            for record in event['Records']:
+                try:
+                    message_body = json.loads(record['body'])
+                    result = process_alert_notification(message_body)
+                    if result.get('success', False):
+                        processed_alerts += 1
+                except Exception as e:
+                    logger.error(f"Error procesando mensaje SQS: {str(e)}")
+            
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': f'Procesados {processed_alerts} de {len(event["Records"])} mensajes'
+                })
+            }
+        
+        elif event.get('httpMethod'):
+            # Invocación desde API Gateway
+            http_method = event.get('httpMethod', '')
+            path = event.get('path', '')
+            
+            if http_method == 'POST' and path == '/alerts/notify':
+                # Procesar la notificación directamente
+                body = json.loads(event.get('body', '{}'))
+                result = process_alert_notification(body)
+                
+                if result.get('success', False):
+                    return {
+                        'statusCode': 200,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'message': 'Notificación enviada correctamente',
+                            'details': result
+                        })
+                    }
+                else:
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'error': 'Error enviando notificación',
+                            'details': result.get('message', 'Error desconocido')
+                        })
+                    }
+            
+            elif http_method == 'POST' and path == '/alerts/preferences':
+                return update_alert_preferences(event, context)
+            
+            elif http_method == 'GET' and path == '/alerts/preferences':
+                return get_alert_preferences(event, context)
+            
+            elif http_method == 'GET' and path == '/alerts/summary':
+                return get_alerts_summary(event, context)
+            
+            else:
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'Operación no válida'})
+                }
+        
+        else:
+            # Invocación directa desde otra función Lambda
+            logger.info("Invocación directa desde Lambda")
+            return process_alert_notification(event)
+            
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error en lambda_handler: {str(e)}")
+        logger.error(f"Traceback: {error_trace}")
+        
+        # Si la invocación fue desde API Gateway, retornar error 500
+        if event.get('httpMethod'):
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': 'Error interno del servidor',
+                    'details': str(e)
+                })
+            }
+        return {
+            'success': False,
+            'error': str(e)
         }
-    }
-
-# Para pruebas locales (opcional)
-# if __name__ == '__main__':
-#     # Simular un objeto context básico para pruebas locales
-#     class MockContext:
-#         function_name = "local_test_handler"
-#     
-#     mock_event = {"key": "value"}
-#     # os.environ['MI_VARIABLE_DE_ENTORNO'] = 'valor_test'
-#     print(lambda_handler(mock_event, MockContext()))
 
 def process_alert_notification(event_data):
     """
@@ -604,167 +671,198 @@ def send_email(sender, recipient, subject, body_html, body_text):
         raise
 
 def update_alert_preferences(event, context):
-    """ Actualiza las preferencias de notificación de un usuario """
+    """
+    Actualiza las preferencias de notificación de un usuario
+    """
     try:
-        # El tenant_id del solicitante debería venir del token (verificado por el autorizador)
-        requesting_tenant_id, error_resp = get_tenant_id_or_error(event, decimal_encoder_cls=DecimalEncoder)
-        if error_resp:
-            return error_resp
-
+        # Obtener datos del body
         body = json.loads(event.get('body', '{}'))
         
-        # Validar campos obligatorios del body
-        # El tenant_id en el body es para qué tenant se aplican estas prefs (debe coincidir con el del token)
-        # El user_id es para qué usuario dentro de ese tenant.
-        required_fields_in_body = ['tenant_id', 'user_id']
-        validation_err = validate_required_fields(body, required_fields_in_body, decimal_encoder_cls=DecimalEncoder)
-        if validation_err:
-            return create_error_response(validation_err["status_code"], validation_err["error_message"], validation_err["error_code"], decimal_encoder_cls=DecimalEncoder)
-
-        tenant_id_in_body = body.get('tenant_id')
-        user_id_from_body = body.get('user_id')
-
-        # Verificar que el tenant_id en el body coincide con el del token del solicitante
-        if tenant_id_in_body != requesting_tenant_id:
-            msg = "El tenant_id en el cuerpo no coincide con el tenant del usuario autenticado."
-            logger.error(msg)
-            return create_error_response(403, msg, error_code="TENANT_ID_MISMATCH", decimal_encoder_cls=DecimalEncoder)
+        # Validar campos obligatorios
+        required_fields = ['tenant_id', 'user_id']
+        missing_fields = [field for field in required_fields if field not in body]
         
-        # Verificar que el usuario existe y pertenece al tenant especificado (que es el del solicitante)
-        user, error_resp_user = get_item_or_404(users_table, {'user_id': user_id_from_body}, "Usuario", decimal_encoder_cls=DecimalEncoder)
-        if error_resp_user:
-            return error_resp_user # Retorna 404 si el usuario no existe
+        if missing_fields:
+            logger.error(f"Faltan campos obligatorios: {', '.join(missing_fields)}")
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': f"Se requieren campos: {', '.join(missing_fields)}"})
+            }
         
-        if user.get('tenant_id') != requesting_tenant_id:
-            msg = f"El usuario {user_id_from_body} no pertenece al tenant {requesting_tenant_id}."
-            logger.error(msg)
-            return create_error_response(403, msg, error_code="USER_TENANT_MISMATCH", decimal_encoder_cls=DecimalEncoder)
+        tenant_id = body.get('tenant_id')
+        user_id = body.get('user_id')
         
+        # Verificar que el usuario existe y pertenece al tenant
+        user_response = users_table.get_item(Key={'user_id': user_id})
+        if 'Item' not in user_response or user_response['Item'].get('tenant_id') != tenant_id:
+            return {
+                'statusCode': 403,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'Usuario no válido para este tenant'})
+            }
+        
+        # Preparar datos de preferencias
         timestamp = datetime.now().isoformat()
-        email_for_prefs = body.get('email', user.get('email')) # Usar email del body o el del usuario como fallback
-        alert_type_pref = body.get('alert_type', 'all')
-        min_severity_pref = body.get('min_severity', 'low')
-        channels_pref = body.get('channels', ['email', 'dashboard'])
-
-        # Validar que los canales y severidad sean válidos (podríamos crear helpers para esto también)
-        if any(ch not in ['email', 'dashboard', 'webhook', 'sms'] for ch in channels_pref):
-             return create_error_response(400, "Uno o más canales de notificación no son válidos.", error_code="INVALID_CHANNELS", decimal_encoder_cls=DecimalEncoder)
-        if min_severity_pref not in ['critical', 'high', 'medium', 'low', 'info']:
-            return create_error_response(400, "Nivel de severidad mínimo no válido.", error_code="INVALID_SEVERITY", decimal_encoder_cls=DecimalEncoder)
-
-        preferences_item = {
-            'user_id': user_id_from_body,
-            'tenant_id': requesting_tenant_id, # Usar el tenant_id validado del token
-            'email': email_for_prefs,
-            'alert_type': alert_type_pref,
-            'min_severity': min_severity_pref,
-            'channels': channels_pref,
+        
+        preferences = {
+            'user_id': user_id,
+            'tenant_id': tenant_id,
+            'email': body.get('email', user_response['Item'].get('email')),
+            'alert_type': body.get('alert_type', 'all'),
+            'min_severity': body.get('min_severity', 'low'),
+            'channels': body.get('channels', ['email', 'dashboard']),
             'updated_at': timestamp
         }
         
+        # Guardar preferencias en DynamoDB
+        # Si la tabla existe
         if alert_preferences_table.table_name:
-            preference_id = f"{user_id_from_body}:{alert_type_pref}" # Clave compuesta
-            preferences_item['preference_id'] = preference_id
-            alert_preferences_table.put_item(Item=preferences_item)
-            msg = 'Preferencias de alerta actualizadas/creadas en tabla de preferencias.'
-            response_data = {'message': msg, 'preference_id': preference_id}
+            # Generar ID único para la preferencia
+            preference_id = f"{user_id}:{body.get('alert_type', 'all')}"
+            preferences['preference_id'] = preference_id
+            
+            alert_preferences_table.put_item(Item=preferences)
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Preferencias actualizadas correctamente',
+                    'preference_id': preference_id
+                })
+            }
         else:
-            # Fallback a la tabla de usuarios (lógica original)
+            # Si no hay tabla específica, actualizar en la tabla de usuarios
             users_table.update_item(
-                Key={'user_id': user_id_from_body},
-                UpdateExpression="set alert_preferences = :p, updated_at = :ua", # Asegurar que updated_at se actualice también en el usuario
+                Key={'user_id': user_id},
+                UpdateExpression="set alert_preferences = :p",
                 ExpressionAttributeValues={
-                    ':p': { # Guardar un subconjunto o la estructura completa según se decida
-                        'min_severity': min_severity_pref,
-                        'channels': channels_pref,
-                        'updated_at': timestamp # Guardar timestamp de esta actualización de prefs
-                    },
-                    ':ua': timestamp
+                    ':p': {
+                        'min_severity': body.get('min_severity', 'low'),
+                        'channels': body.get('channels', ['email', 'dashboard']),
+                        'updated_at': timestamp
+                    }
                 }
             )
-            msg = 'Preferencias de alerta actualizadas en el perfil del usuario.'
-            response_data = {'message': msg, 'user_id': user_id_from_body}
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Preferencias actualizadas correctamente',
+                    'user_id': user_id
+                })
+            }
         
-        logger.info(f"{msg} para usuario {user_id_from_body} en tenant {requesting_tenant_id}")
-        return create_success_response(response_data, decimal_encoder_cls=DecimalEncoder)
-        
-    except json.JSONDecodeError as json_err:
-        logger.error(f"Error parseando JSON en update_alert_preferences: {str(json_err)}")
-        return create_error_response(400, "Cuerpo de solicitud JSON inválido.", error_code="INVALID_JSON_BODY", decimal_encoder_cls=DecimalEncoder)
     except Exception as e:
-        logger.error(f"Error actualizando preferencias de alerta: {str(e)}")
-        return create_error_response(500, str(e), decimal_encoder_cls=DecimalEncoder, is_internal_error=True)
+        logger.error(f"Error actualizando preferencias: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f"Error interno: {str(e)}"})
+        }
 
 def get_alert_preferences(event, context):
-    """ Obtiene las preferencias de notificación de un usuario """
+    """
+    Obtiene las preferencias de notificación de un usuario
+    """
     try:
-        # Obtener tenant_id del solicitante desde el token
-        requesting_tenant_id, error_resp = get_tenant_id_or_error(event, decimal_encoder_cls=DecimalEncoder)
-        if error_resp:
-            return error_resp
-
+        # Obtener parámetros de consulta
         query_params = event.get('queryStringParameters', {}) or {}
-        # El tenant_id en query_params es para qué tenant se consultan las prefs (debe coincidir con el del token)
-        # El user_id es para qué usuario específico dentro de ese tenant.
-        tenant_id_param = query_params.get('tenant_id') 
-        user_id_param = query_params.get('user_id')
-
-        if not tenant_id_param or not user_id_param:
-            return create_error_response(400, "Se requieren los parámetros tenant_id y user_id.", error_code="MISSING_QUERY_PARAMS", decimal_encoder_cls=DecimalEncoder)
-
-        # Verificar que el tenant_id en query params coincide con el del token del solicitante
-        if tenant_id_param != requesting_tenant_id:
-            msg = "El tenant_id en los parámetros no coincide con el tenant del usuario autenticado."
-            logger.error(msg)
-            return create_error_response(403, msg, error_code="TENANT_ID_MISMATCH_QUERY", decimal_encoder_cls=DecimalEncoder)
+        tenant_id = query_params.get('tenant_id')
+        user_id = query_params.get('user_id')
         
-        # Verificar que el usuario existe y pertenece al tenant especificado
-        user, error_resp_user = get_item_or_404(users_table, {'user_id': user_id_param}, "Usuario", decimal_encoder_cls=DecimalEncoder)
-        if error_resp_user:
-            return error_resp_user
+        if not tenant_id or not user_id:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'Se requieren tenant_id y user_id'})
+            }
         
-        if user.get('tenant_id') != requesting_tenant_id: # Usar el tenant_id validado del token
-            msg = f"El usuario {user_id_param} no pertenece al tenant {requesting_tenant_id}."
-            logger.error(msg)
-            return create_error_response(403, msg, error_code="USER_TENANT_MISMATCH_QUERY", decimal_encoder_cls=DecimalEncoder)
+        # Verificar que el usuario existe y pertenece al tenant
+        user_response = users_table.get_item(Key={'user_id': user_id})
+        if 'Item' not in user_response or user_response['Item'].get('tenant_id') != tenant_id:
+            return {
+                'statusCode': 403,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'Usuario no válido para este tenant'})
+            }
         
+        # Obtener preferencias
         preferences = []
-        if alert_preferences_table.table_name: # Chequeo si la tabla fue inicializada
-            try:
-                response = alert_preferences_table.scan(
-                    FilterExpression="tenant_id = :t AND user_id = :u",
-                    ExpressionAttributeValues={':t': requesting_tenant_id, ':u': user_id_param}
-                )
-                preferences = response.get('Items', [])
-            except Exception as e_scan_prefs:
-                logger.error(f"Error escaneando tabla de preferencias: {str(e_scan_prefs)}")
-                # No devolver error aquí, podría ser que la tabla no esté llena pero sí el perfil del usuario
         
-        if not preferences: # Si no hay en la tabla de preferencias o la tabla no existe/falló
-            user_prefs_from_profile = user.get('alert_preferences', {})
-            if user_prefs_from_profile: # Si hay algo en el perfil del usuario
+        # Si la tabla existe
+        if alert_preferences_table.table_name:
+            # Consultar preferencias específicas del usuario
+            response = alert_preferences_table.scan(
+                FilterExpression="tenant_id = :t AND user_id = :u",
+                ExpressionAttributeValues={
+                    ':t': tenant_id,
+                    ':u': user_id
+                }
+            )
+            
+            preferences = response.get('Items', [])
+        else:
+            # Si no hay tabla específica, obtener de la tabla de usuarios
+            user = user_response['Item']
+            user_preferences = user.get('alert_preferences', {})
+            
+            # Convertir a formato compatible
+            if user_preferences:
                 preferences = [{
-                    'user_id': user_id_param,
-                    'tenant_id': requesting_tenant_id,
-                    'email': user.get('email'), # Email del perfil del usuario
-                    'alert_type': 'all', # Default porque estas son generales del perfil
-                    'min_severity': user_prefs_from_profile.get('min_severity', 'low'),
-                    'channels': user_prefs_from_profile.get('channels', ['email', 'dashboard']),
-                    'updated_at': user_prefs_from_profile.get('updated_at', user.get('updated_at', ''))
+                    'user_id': user_id,
+                    'tenant_id': tenant_id,
+                    'email': user.get('email'),
+                    'alert_type': 'all',
+                    'min_severity': user_preferences.get('min_severity', 'low'),
+                    'channels': user_preferences.get('channels', ['email', 'dashboard']),
+                     'updated_at': user_preferences.get('updated_at', '')
                 }]
-            else: # Si no hay nada en tabla de prefs ni en perfil, devolver vacío o default.
-                # Devolver una preferencia default para 'all' types, o lista vacía.
-                # Por consistencia con el caso donde se lee de la tabla, devolver una lista vacía si no hay nada.
-                logger.info(f"No se encontraron preferencias de alerta para el usuario {user_id_param} en tenant {requesting_tenant_id}")
-
-        return create_success_response({'preferences': preferences}, decimal_encoder_cls=DecimalEncoder)
         
-    except json.JSONDecodeError as json_err: # Aunque esta función no parsea JSON del body
-        logger.error(f"Error JSON en get_alert_preferences (inesperado): {str(json_err)}")
-        return create_error_response(400, "Error de formato inesperado.", error_code="UNEXPECTED_JSON_ERROR", decimal_encoder_cls=DecimalEncoder)
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({
+                'preferences': preferences
+            })
+        }
+        
     except Exception as e:
-        logger.error(f"Error obteniendo preferencias de alerta: {str(e)}")
-        return create_error_response(500, str(e), decimal_encoder_cls=DecimalEncoder, is_internal_error=True)
+        logger.error(f"Error obteniendo preferencias: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f"Error interno: {str(e)}"})
+        }
 
 def get_tenant_id_from_headers(headers):
     """Extrae el tenant_id de las cabeceras, insensible a mayúsculas/minúsculas."""

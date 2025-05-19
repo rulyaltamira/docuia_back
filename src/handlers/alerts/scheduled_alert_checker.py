@@ -1,29 +1,10 @@
-"""
-Handler para leer y listar alertas del sistema DocPilot
-"""
-
 import json
 import os
-import boto3
-import logging
-# from decimal import Decimal # Ya no se necesita aquí, se importa el encoder
-from botocore.exceptions import ClientError # Mantener para manejo específico si es necesario
 
-# Importar helpers de utilidad
-from src.utils.cors_middleware import add_cors_headers
-from src.utils.auth_utils import get_tenant_id_or_error
-from src.utils.response_helpers import create_success_response, create_error_response
-from src.utils.encoders import DecimalEncoder # Importar el encoder centralizado
-
-# Configuración de servicios
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-dynamodb = boto3.resource('dynamodb')
-alerts_table = dynamodb.Table(os.environ.get('ALERTS_TABLE'))
-DEFAULT_LIMIT = 10 # Mantener como constante local o mover a un config si se usa en más sitios
-
-# Ya no se necesita DecimalEncoder local ni get_tenant_id_from_headers local
+# Placeholder para clientes AWS si son necesarios
+# import boto3
+# s3_client = boto3.client('s3')
+# dynamodb_resource = boto3.resource('dynamodb')
 
 def lambda_handler(event, context):
     function_name = context.function_name if hasattr(context, 'function_name') else 'local_test'

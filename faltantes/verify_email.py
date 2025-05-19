@@ -7,9 +7,6 @@ from src.utils.response_helper import success_response, error_response
 import time
 import uuid
 
-# Nueva variable de entorno para la URL de redirección post-verificación
-POST_VERIFY_REDIRECT_URL = os.environ.get("POST_VERIFY_REDIRECT_URL", "https://app.docpilot.com")
-
 # Configuración de logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
